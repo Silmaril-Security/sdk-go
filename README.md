@@ -43,7 +43,7 @@ This SDK provides the low-level Go interface for that workflow:
 This SDK is distributed as a Go module.
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go@v0.1.2
+go get github.com/Silmaril-Security/sdk-go@v0.1.3
 ```
 
 Requires Go 1.22 or later.
@@ -155,9 +155,9 @@ Transient transport failures and HTTP 408, 429, 500, 502, 503, and 504 responses
 
 ## Releasing
 
-Tag the repository with `v0.1.2` to publish a new version to the Go module proxy:
+Tag the repository with `v0.1.3` to publish a new version to the Go module proxy:
 
 ```sh
-git tag v0.1.2
-git push origin v0.1.2
+git tag v0.1.3
+git push origin v0.1.3
 ```
