@@ -9,7 +9,7 @@ import (
 	"log"
 	"os"
 
-	silmaril "github.com/Silmaril-Security/silmaril-firewall-go"
+	silmaril "github.com/Silmaril-Security/sdk"
 )
 
 func main() {

@@ -10,7 +10,7 @@ wire contract, hook labels, threshold behavior, and chunking behavior.
 This SDK is distributed as a Go module.
 
 ```sh
-go get github.com/Silmaril-Security/silmaril-firewall-go@v0.1.2
+go get github.com/Silmaril-Security/sdk@v0.1.2
 ```
 
 Requires Go 1.22 or later.
@@ -42,7 +42,7 @@ import (
     "log"
     "os"
 
-    silmaril "github.com/Silmaril-Security/silmaril-firewall-go"
+    silmaril "github.com/Silmaril-Security/sdk"
 )
 
 func main() {
