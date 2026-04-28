@@ -1,16 +1,17 @@
-# silmaril (Go SDK)
+# Silmaril Firewall Go SDK
 
 Go SDK for the Silmaril Firewall, providing prompt injection and jailbreak detection for AI applications.
 
-Standalone Go SDK for the Silmaril Firewall. It matches the firewall `/classify`
-wire contract, hook labels, threshold behavior, and chunking behavior.
+This is the Go package for Silmaril Firewall. Language SDK repositories follow
+the `firewall-sdk-<language>` naming pattern. The Go package itself is imported
+as `silmaril`.
 
 ## Install
 
 This SDK is distributed as a Go module.
 
 ```sh
-go get github.com/Silmaril-Security/sdk@v0.1.2
+go get github.com/Silmaril-Security/firewall-sdk-go@v0.1.2
 ```
 
 Requires Go 1.22 or later.
@@ -42,7 +43,7 @@ import (
     "log"
     "os"
 
-    silmaril "github.com/Silmaril-Security/sdk"
+    silmaril "github.com/Silmaril-Security/firewall-sdk-go"
 )
 
 func main() {
