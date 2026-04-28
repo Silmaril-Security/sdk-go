@@ -22,6 +22,8 @@ type Firewall struct {
 	threshold        float64
 	hookThresholds   map[HookLabel]float64
 	httpClient       *http.Client
+	shadowMode       bool
+	onClassify       func(ClassifyEvent)
 	maxRetries       int
 	retryBaseBackoff time.Duration
 	retryMaxBackoff  time.Duration
@@ -72,6 +74,8 @@ func New(opts Options) (*Firewall, error) {
 		threshold:        threshold,
 		hookThresholds:   hookThresholds,
 		httpClient:       httpClient,
+		shadowMode:       opts.ShadowMode,
+		onClassify:       opts.OnClassify,
 		maxRetries:       defaultMaxRetries,
 		retryBaseBackoff: time.Second,
 		retryMaxBackoff:  30 * time.Second,

@@ -34,6 +34,8 @@ type Options struct {
 	Timeout        time.Duration
 	HookThresholds map[HookLabel]float64
 	HTTPClient     *http.Client
+	ShadowMode     bool
+	OnClassify     func(ClassifyEvent)
 }
 
 type classifyConfig struct {
@@ -77,4 +79,46 @@ func WithBatchToolNames(names []string) BatchClassifyOption {
 // WithBatchThreshold sets the score threshold sent with a batch request.
 func WithBatchThreshold(threshold float64) BatchClassifyOption {
 	return func(c *batchClassifyConfig) { c.threshold = &threshold }
+}
+
+// ClassifyEvent describes a blocking check decision. It is emitted for both
+// enforced and shadow-mode checks.
+type ClassifyEvent struct {
+	Hook       HookLabel
+	ToolName   string
+	Text       string
+	Result     BlockResult
+	Blocked    bool
+	ShadowMode bool
+}
+
+type checkConfig struct {
+	hook       HookLabel
+	toolName   string
+	shadowMode *bool
+	onClassify func(ClassifyEvent)
+}
+
+// CheckOption customizes a blocking Check call.
+type CheckOption func(*checkConfig)
+
+// WithCheckHook sets the pipeline-stage label for the checked text.
+func WithCheckHook(hook HookLabel) CheckOption {
+	return func(c *checkConfig) { c.hook = hook }
+}
+
+// WithCheckToolName sets the tool name for tool-name-aware checks.
+func WithCheckToolName(name string) CheckOption {
+	return func(c *checkConfig) { c.toolName = name }
+}
+
+// WithCheckShadowMode overrides the client-level shadow-mode setting for a
+// single Check call.
+func WithCheckShadowMode(enabled bool) CheckOption {
+	return func(c *checkConfig) { c.shadowMode = &enabled }
+}
+
+// WithCheckOnClassify adds a per-call callback for Check decisions.
+func WithCheckOnClassify(fn func(ClassifyEvent)) CheckOption {
+	return func(c *checkConfig) { c.onClassify = fn }
 }
