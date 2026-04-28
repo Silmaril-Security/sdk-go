@@ -16,7 +16,7 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("Silmaril API error %d %s: %s", e.Status, e.StatusText, e.Body)
 }
 
-// PromptBlockedError is returned by Check when a classified prompt meets or
+// PromptBlockedError is returned by Classify when a classified prompt meets or
 // exceeds the effective threshold and shadow mode is not enabled.
 type PromptBlockedError struct {
 	Score      float64
@@ -29,4 +29,33 @@ type PromptBlockedError struct {
 
 func (e *PromptBlockedError) Error() string {
 	return fmt.Sprintf("firewall: prompt blocked (score=%.4f, threshold=%.4f)", e.Score, e.Threshold)
+}
+
+// BlockedBatchItem describes one blocked item in a ClassifyBatch call.
+type BlockedBatchItem struct {
+	Index    int
+	Text     string
+	Hook     HookLabel
+	ToolName string
+	Result   BlockResult
+}
+
+// BatchPromptBlockedError is returned by ClassifyBatch when one or more
+// classified texts meet or exceed the effective threshold and shadow mode is
+// not enabled.
+type BatchPromptBlockedError struct {
+	Blocked []BlockedBatchItem
+}
+
+func (e *BatchPromptBlockedError) Error() string {
+	if len(e.Blocked) == 1 {
+		item := e.Blocked[0]
+		return fmt.Sprintf(
+			"firewall: batch prompt blocked at index %d (score=%.4f, threshold=%.4f)",
+			item.Index,
+			item.Result.Score,
+			item.Result.Threshold,
+		)
+	}
+	return fmt.Sprintf("firewall: batch prompts blocked (%d items)", len(e.Blocked))
 }

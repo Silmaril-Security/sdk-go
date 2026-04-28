@@ -62,6 +62,9 @@ func TestNewDefaults(t *testing.T) {
 	if fw.httpClient.Timeout != defaultTimeout {
 		t.Errorf("timeout = %v, want %v", fw.httpClient.Timeout, defaultTimeout)
 	}
+	if fw.shadowMode {
+		t.Error("shadowMode = true, want false")
+	}
 }
 
 func TestNewHonorsExplicitZeroThreshold(t *testing.T) {
@@ -116,7 +119,7 @@ func TestClassifySingleHappyPath(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	fw, err := New(Options{APIKey: "sk-test", APIURL: ts.URL})
+	fw, err := New(Options{APIKey: "sk-test", APIURL: ts.URL, ShadowMode: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,6 +181,7 @@ func TestClassifyBatchHappyPath(t *testing.T) {
 	results, err := fw.ClassifyBatch(context.Background(), []string{"a", "b"},
 		WithBatchHooks([]HookLabel{HookUserInput, HookUserInput}),
 		WithBatchToolNames([]string{"read_file", ""}),
+		WithBatchShadowMode(true),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -265,7 +269,7 @@ func TestClassifyTrustsServerPrediction(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, Threshold: float64Ptr(0.5)})
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, Threshold: float64Ptr(0.5), ShadowMode: true})
 	result, err := fw.Classify(context.Background(), "server-side benign")
 	if err != nil {
 		t.Fatal(err)
@@ -585,7 +589,7 @@ func TestClassifyChunksLongInputAndPicksMaxScore(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
 	long := strings.Repeat("a", ChunkWindowChars*3)
 	res, err := fw.Classify(context.Background(), long, WithHook(HookUserInput))
 	if err != nil {
