@@ -1,10 +1,9 @@
 // Copyright (c) 2024-2026 Silmaril Security Inc. All rights reserved.
 // PROPRIETARY AND CONFIDENTIAL
 
-// Package firewall is the Go SDK for the Silmaril Firewall, providing
-// prompt injection and jailbreak detection for AI applications. It mirrors
-// the wire contract, hook labels, and chunking behavior of the Python and
-// TypeScript SDKs.
+// Package firewall is the Go SDK for Silmaril Firewall, a self-healing prompt
+// injection defense for AI applications. It mirrors the wire contract, hook
+// labels, and chunking behavior of the Python and TypeScript SDKs.
 package firewall
 
 import "fmt"

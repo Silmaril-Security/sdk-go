@@ -1,10 +1,42 @@
 # Silmaril Firewall Go SDK
 
-Go SDK for the Silmaril Firewall, providing prompt injection and jailbreak detection for AI applications.
+Go SDK for Silmaril Firewall, a self-healing prompt injection defense for AI
+applications.
 
-This is the Go package for Silmaril Firewall. Language SDK repositories follow
-the `sdk-<language>` naming pattern. The Go package itself is imported as
-`firewall`.
+Silmaril evaluates agent execution as it unfolds, helping applications block
+harmful outcomes before injected instructions can manipulate tools, context, or
+data access. This package is the Go client for calling the Silmaril `/classify`
+API from application code.
+
+Language SDK repositories follow the `sdk-<language>` naming pattern. The Go
+package itself is imported as `firewall`.
+
+## Background
+
+Prompt injection attacks have moved beyond single malicious strings. Modern
+attacks can be hidden in emails, calendar events, documents, webpages, tool
+responses, and other untrusted context that an AI agent reads while completing a
+task. Once inside the agent loop, those instructions can steer tool calls,
+poison context, exfiltrate data, or trigger actions the user never intended.
+
+Traditional guardrails usually inspect isolated inputs. Silmaril is built around
+the execution sequence: user intent, application context, workflow stage, tool
+metadata, and accumulated state. The firewall returns a pass/block decision that
+applications can enforce at the orchestration layer.
+
+Silmaril is designed to improve over time. Threat-hunting agents discover new
+attack paths, those findings become training data, and updated firewall models
+can be redeployed so defenses adapt as attacks change.
+
+This SDK provides the low-level Go interface for that workflow:
+
+- Create a tenant-specific firewall client.
+- Classify user input, tool calls, tool responses, model output, or system
+  prompt content.
+- Preserve hook and tool-name context for more accurate decisions.
+- Apply configurable thresholds and shadow-mode blocking semantics.
+- Chunk long inputs consistently before they reach the API.
+- Retry transient API Gateway and model-serving failures.
 
 ## Install
 
