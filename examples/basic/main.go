@@ -8,7 +8,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/Silmaril-Security/sdk-go"
+	"github.com/Silmaril-Security/sdk-go/firewall"
 )
 
 func main() {
