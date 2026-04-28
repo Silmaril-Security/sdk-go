@@ -1,5 +1,4 @@
 // Copyright (c) 2024-2026 Silmaril Security Inc. All rights reserved.
-// PROPRIETARY AND CONFIDENTIAL
 
 package main
 

@@ -1,6 +1,6 @@
 # Silmaril Firewall Go SDK
 
-Go SDK for Silmaril Firewall, a self-healing prompt injection defense for AI
+Go SDK for Silmaril Firewall: self-healing prompt injection defense for AI
 applications.
 
 Silmaril evaluates agent execution as it unfolds, helping applications block
