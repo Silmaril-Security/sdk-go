@@ -38,29 +38,27 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	result, err := f.classifyRaw(ctx, text, cfg)
+	if err != nil {
+		return BlockResult{}, err
+	}
+	event := f.newClassifyEvent(text, cfg.hook, cfg.toolName, result, f.effectiveShadowMode(cfg.shadowMode))
+	f.fireClassifyEvent(event)
+	if event.Blocked && !event.ShadowMode {
+		return result, promptBlockedErrorFromEvent(event)
+	}
+	return result, nil
+}
+
+func (f *Firewall) classifyRaw(ctx context.Context, text string, cfg classifyConfig) (BlockResult, error) {
 	chunks, err := ChunkText(text)
 	if err != nil {
 		return BlockResult{}, err
 	}
 	if len(chunks) == 1 {
-		threshold := f.effectiveThreshold(cfg.hook)
-		payload := singleRequestPayload{
-			Text:      chunks[0],
-			Threshold: threshold,
-		}
-		if cfg.hook != "" {
-			payload.Hook = cfg.hook
-		}
-		if cfg.toolName != "" {
-			payload.ToolName = cfg.toolName
-		}
-		var resp singleResponse
-		if err := f.postJSON(ctx, payload, &resp); err != nil {
-			return BlockResult{}, err
-		}
-		return blockResultFromResponse(resp, threshold)
+		return f.classifySingleRaw(ctx, chunks[0], cfg)
 	}
-	results, err := f.classifyChunks(ctx, chunks, cfg)
+	results, err := f.classifyChunksRaw(ctx, chunks, cfg)
 	if err != nil {
 		return BlockResult{}, err
 	}
@@ -73,16 +71,35 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 	return best, nil
 }
 
-func (f *Firewall) classifyChunks(ctx context.Context, chunks []string, cfg classifyConfig) ([]BlockResult, error) {
-	batchOpts := make([]BatchClassifyOption, 0, 3)
+func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg classifyConfig) (BlockResult, error) {
+	threshold := f.effectiveThreshold(cfg.hook)
+	payload := singleRequestPayload{
+		Text:      text,
+		Threshold: threshold,
+	}
 	if cfg.hook != "" {
-		batchOpts = append(batchOpts, WithBatchHooks(repeatHooks(cfg.hook, len(chunks))))
+		payload.Hook = cfg.hook
 	}
 	if cfg.toolName != "" {
-		batchOpts = append(batchOpts, WithBatchToolNames(repeatToolNames(cfg.toolName, len(chunks))))
+		payload.ToolName = cfg.toolName
 	}
-	batchOpts = append(batchOpts, WithBatchThreshold(f.effectiveThreshold(cfg.hook)))
-	return f.ClassifyBatch(ctx, chunks, batchOpts...)
+	var resp singleResponse
+	if err := f.postJSON(ctx, payload, &resp); err != nil {
+		return BlockResult{}, err
+	}
+	return blockResultFromResponse(resp, threshold)
+}
+
+func (f *Firewall) classifyChunksRaw(ctx context.Context, chunks []string, cfg classifyConfig) ([]BlockResult, error) {
+	threshold := f.effectiveThreshold(cfg.hook)
+	batchCfg := batchClassifyConfig{threshold: &threshold}
+	if cfg.hook != "" {
+		batchCfg.hooks = repeatHooks(cfg.hook, len(chunks))
+	}
+	if cfg.toolName != "" {
+		batchCfg.toolNames = repeatToolNames(cfg.toolName, len(chunks))
+	}
+	return f.classifyBatchRaw(ctx, chunks, batchCfg)
 }
 
 // ClassifyBatch classifies multiple independent texts in a single request.
@@ -92,6 +109,32 @@ func (f *Firewall) ClassifyBatch(ctx context.Context, texts []string, opts ...Ba
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	results, err := f.classifyBatchRaw(ctx, texts, cfg)
+	if err != nil {
+		return nil, err
+	}
+	shadowMode := f.effectiveShadowMode(cfg.shadowMode)
+	blocked := make([]BlockedBatchItem, 0)
+	for i, result := range results {
+		event := f.newClassifyEvent(texts[i], batchHookAt(cfg, i), batchToolNameAt(cfg, i), result, shadowMode)
+		f.fireClassifyEvent(event)
+		if event.Blocked && !event.ShadowMode {
+			blocked = append(blocked, BlockedBatchItem{
+				Index:    i,
+				Text:     texts[i],
+				Hook:     event.Hook,
+				ToolName: event.ToolName,
+				Result:   result,
+			})
+		}
+	}
+	if len(blocked) > 0 {
+		return results, &BatchPromptBlockedError{Blocked: blocked}
+	}
+	return results, nil
+}
+
+func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg batchClassifyConfig) ([]BlockResult, error) {
 	if len(texts) == 0 {
 		return nil, errors.New("firewall: texts must not be empty")
 	}
@@ -131,6 +174,68 @@ func (f *Firewall) ClassifyBatch(ctx context.Context, texts []string, opts ...Ba
 		results[i] = result
 	}
 	return results, nil
+}
+
+func (f *Firewall) newClassifyEvent(text string, hook HookLabel, toolName string, result BlockResult, shadowMode bool) ClassifyEvent {
+	if hook == "" {
+		hook = HookUnknown
+	}
+	return ClassifyEvent{
+		Hook:       hook,
+		ToolName:   toolName,
+		Text:       text,
+		Result:     result,
+		Blocked:    result.Score >= result.Threshold,
+		ShadowMode: shadowMode,
+	}
+}
+
+func (f *Firewall) effectiveShadowMode(shadowMode *bool) bool {
+	if shadowMode != nil {
+		return *shadowMode
+	}
+	return f.shadowMode
+}
+
+func (f *Firewall) fireClassifyEvent(event ClassifyEvent) {
+	if f.onClassify != nil {
+		safeClassifyCallback(f.onClassify, event)
+	}
+}
+
+func safeClassifyCallback(fn func(ClassifyEvent), event ClassifyEvent) {
+	defer func() {
+		_ = recover()
+	}()
+	fn(event)
+}
+
+func promptBlockedErrorFromEvent(event ClassifyEvent) *PromptBlockedError {
+	return &PromptBlockedError{
+		Score:      event.Result.Score,
+		Threshold:  event.Result.Threshold,
+		PromptText: event.Text,
+		Hook:       event.Hook,
+		ToolName:   event.ToolName,
+		Result:     event.Result,
+	}
+}
+
+func batchHookAt(cfg batchClassifyConfig, index int) HookLabel {
+	if len(cfg.hooks) == 0 {
+		return HookUnknown
+	}
+	if cfg.hooks[index] == "" {
+		return HookUnknown
+	}
+	return cfg.hooks[index]
+}
+
+func batchToolNameAt(cfg batchClassifyConfig, index int) string {
+	if len(cfg.toolNames) == 0 {
+		return ""
+	}
+	return cfg.toolNames[index]
 }
 
 func (f *Firewall) batchThreshold(cfg batchClassifyConfig) float64 {

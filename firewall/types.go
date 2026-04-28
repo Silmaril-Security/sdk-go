@@ -39,8 +39,9 @@ type Options struct {
 }
 
 type classifyConfig struct {
-	hook     HookLabel
-	toolName string
+	hook       HookLabel
+	toolName   string
+	shadowMode *bool
 }
 
 // ClassifyOption customizes a single Classify call.
@@ -56,10 +57,17 @@ func WithToolName(name string) ClassifyOption {
 	return func(c *classifyConfig) { c.toolName = name }
 }
 
+// WithShadowMode overrides the client-level shadow-mode setting for a single
+// Classify call.
+func WithShadowMode(enabled bool) ClassifyOption {
+	return func(c *classifyConfig) { c.shadowMode = &enabled }
+}
+
 type batchClassifyConfig struct {
-	hooks     []HookLabel
-	toolNames []string
-	threshold *float64
+	hooks      []HookLabel
+	toolNames  []string
+	threshold  *float64
+	shadowMode *bool
 }
 
 // BatchClassifyOption customizes a single ClassifyBatch call.
@@ -81,8 +89,14 @@ func WithBatchThreshold(threshold float64) BatchClassifyOption {
 	return func(c *batchClassifyConfig) { c.threshold = &threshold }
 }
 
-// ClassifyEvent describes a blocking check decision. It is emitted for both
-// enforced and shadow-mode checks.
+// WithBatchShadowMode overrides the client-level shadow-mode setting for a
+// single ClassifyBatch call.
+func WithBatchShadowMode(enabled bool) BatchClassifyOption {
+	return func(c *batchClassifyConfig) { c.shadowMode = &enabled }
+}
+
+// ClassifyEvent describes a classification decision. It is emitted for both
+// enforced and shadow-mode calls.
 type ClassifyEvent struct {
 	Hook       HookLabel
 	ToolName   string
@@ -90,35 +104,4 @@ type ClassifyEvent struct {
 	Result     BlockResult
 	Blocked    bool
 	ShadowMode bool
-}
-
-type checkConfig struct {
-	hook       HookLabel
-	toolName   string
-	shadowMode *bool
-	onClassify func(ClassifyEvent)
-}
-
-// CheckOption customizes a blocking Check call.
-type CheckOption func(*checkConfig)
-
-// WithCheckHook sets the pipeline-stage label for the checked text.
-func WithCheckHook(hook HookLabel) CheckOption {
-	return func(c *checkConfig) { c.hook = hook }
-}
-
-// WithCheckToolName sets the tool name for tool-name-aware checks.
-func WithCheckToolName(name string) CheckOption {
-	return func(c *checkConfig) { c.toolName = name }
-}
-
-// WithCheckShadowMode overrides the client-level shadow-mode setting for a
-// single Check call.
-func WithCheckShadowMode(enabled bool) CheckOption {
-	return func(c *checkConfig) { c.shadowMode = &enabled }
-}
-
-// WithCheckOnClassify adds a per-call callback for Check decisions.
-func WithCheckOnClassify(fn func(ClassifyEvent)) CheckOption {
-	return func(c *checkConfig) { c.onClassify = fn }
 }

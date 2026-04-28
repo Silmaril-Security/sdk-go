@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -42,6 +43,16 @@ func main() {
 		firewall.WithHook(firewall.HookUserInput),
 	)
 	if err != nil {
+		var blocked *firewall.PromptBlockedError
+		if errors.As(err, &blocked) {
+			fmt.Printf(
+				"malicious blocked: prediction=%s score=%.4f threshold=%.4f\n",
+				blocked.Result.Prediction,
+				blocked.Score,
+				blocked.Threshold,
+			)
+			return
+		}
 		log.Fatalf("malicious classify: %v", err)
 	}
 	fmt.Printf("malicious: prediction=%s score=%.4f\n", malicious.Prediction, malicious.Score)

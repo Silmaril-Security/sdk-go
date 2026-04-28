@@ -11,8 +11,9 @@
   reads, and final network error wrapping.
 - Moves the SDK package into `firewall/`, with import path
   `github.com/Silmaril-Security/sdk-go/firewall`.
-- Adds shadow-mode blocking checks with `Check`, `CheckEvent`,
-  `ClassifyEvent`, and `PromptBlockedError`.
+- Makes `Classify` and `ClassifyBatch` enforce thresholds by default, with
+  client-level and per-call shadow mode, `ClassifyEvent`,
+  `PromptBlockedError`, and `BatchPromptBlockedError`.
 
 ## v0.1.5
 
