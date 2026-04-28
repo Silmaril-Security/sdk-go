@@ -161,16 +161,3 @@ This runs `gofmt`, `go mod tidy`, `go vet ./...`, and `go test -race ./...`.
 
 This SDK is source-available under the Silmaril SDK Source-Available License.
 It is not permissive open source. See [LICENSE](LICENSE).
-
-## Releasing
-
-Update `VERSION` and `CHANGELOG.md`, then tag the repository with the matching
-semantic version:
-
-```sh
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
-
-The release workflow verifies that the tag matches `VERSION` and runs the race
-test suite.
