@@ -26,6 +26,7 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
           cache: true
+          cache-dependency-path: go.mod
 
       - name: Format check
         run: test -z "$(gofmt -l .)"
@@ -33,11 +34,13 @@ jobs:
       - name: Tidy check
         run: |
           go mod tidy
-          git diff --exit-code go.mod go.sum
+          git diff --exit-code -- go.mod
+          if [ -f go.sum ]; then
+            git diff --exit-code -- go.sum
+          fi
 
       - name: Vet
         run: go vet ./...
 
       - name: Test
         run: go test -race ./...
-
