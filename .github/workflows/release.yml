@@ -20,6 +20,7 @@ jobs:
         with:
           go-version: "1.22.x"
           cache: true
+          cache-dependency-path: go.mod
 
       - name: Verify tag matches VERSION
         run: |
@@ -27,4 +28,3 @@ jobs:
 
       - name: Test
         run: go test -race ./...
-
