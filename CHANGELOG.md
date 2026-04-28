@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.4
+
+- Removes extra exported `Firewall` helper methods from the public API.
+- Removes the unused `ShadowMode` option from the low-level client.
+
 ## v0.1.3
 
 - Publishes the SDK from the public `github.com/Silmaril-Security/sdk-go`

@@ -35,7 +35,6 @@ type Firewall struct {
 	threshold      float64
 	timeout        time.Duration
 	hookThresholds map[HookLabel]float64
-	shadowMode     bool
 	httpClient     *http.Client
 }
 
@@ -76,41 +75,17 @@ func New(opts Options) (*Firewall, error) {
 		threshold:      threshold,
 		timeout:        timeout,
 		hookThresholds: hookThresholds,
-		shadowMode:     opts.ShadowMode,
 		httpClient:     httpClient,
 	}, nil
 }
 
-// Threshold returns the configured default score threshold.
-func (f *Firewall) Threshold() float64 { return f.threshold }
-
-// EffectiveThreshold returns the configured threshold for hook, falling back
-// to the client's default threshold.
-func (f *Firewall) EffectiveThreshold(hook HookLabel) float64 {
+func (f *Firewall) effectiveThreshold(hook HookLabel) float64 {
 	if hook != "" {
 		if threshold, ok := f.hookThresholds[hook]; ok {
 			return threshold
 		}
 	}
 	return f.threshold
-}
-
-// HookThresholds returns a copy of the per-hook threshold overrides.
-func (f *Firewall) HookThresholds() map[HookLabel]float64 {
-	out := make(map[HookLabel]float64, len(f.hookThresholds))
-	for k, v := range f.hookThresholds {
-		out[k] = v
-	}
-	return out
-}
-
-// ShadowMode reports whether the client was configured for shadow mode.
-func (f *Firewall) ShadowMode() bool { return f.shadowMode }
-
-// ShouldBlock reports whether result should block for hook under this client's
-// threshold configuration. It returns false in shadow mode.
-func (f *Firewall) ShouldBlock(result BlockResult, hook HookLabel) bool {
-	return !f.shadowMode && result.Score >= f.EffectiveThreshold(hook)
 }
 
 type singleRequestPayload struct {
@@ -150,7 +125,7 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 	if len(chunks) == 1 {
 		payload := singleRequestPayload{
 			Text:      chunks[0],
-			Threshold: f.EffectiveThreshold(cfg.hook),
+			Threshold: f.effectiveThreshold(cfg.hook),
 		}
 		if cfg.hook != "" {
 			payload.Hook = cfg.hook
@@ -180,7 +155,7 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 func (f *Firewall) classifyChunks(ctx context.Context, chunks []string, cfg classifyConfig) ([]BlockResult, error) {
 	payload := batchRequestPayload{
 		Texts:     chunks,
-		Threshold: f.EffectiveThreshold(cfg.hook),
+		Threshold: f.effectiveThreshold(cfg.hook),
 	}
 	if cfg.hook != "" {
 		payload.Hooks = repeatHooks(cfg.hook, len(chunks))
@@ -221,7 +196,7 @@ func repeatToolNames(toolName string, n int) []*string {
 
 func (f *Firewall) resultForScore(score float64, hook HookLabel) BlockResult {
 	prediction := PredictionBenign
-	if score >= f.EffectiveThreshold(hook) {
+	if score >= f.effectiveThreshold(hook) {
 		prediction = PredictionMalicious
 	}
 	return BlockResult{Prediction: prediction, Score: score}

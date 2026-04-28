@@ -30,7 +30,6 @@ type Options struct {
 	Threshold      float64
 	Timeout        time.Duration
 	HookThresholds map[HookLabel]float64
-	ShadowMode     bool
 	HTTPClient     *http.Client
 }
 
