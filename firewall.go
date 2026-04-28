@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,24 +19,21 @@ import (
 const (
 	defaultMaxRetries = 5
 	defaultTimeout    = 10 * time.Second
-)
-
-// retryBaseBackoff and retryMaxBackoff are package-level vars so tests can
-// shorten the exponential backoff without waiting real seconds.
-var (
-	retryBaseBackoff = time.Second
-	retryMaxBackoff  = 30 * time.Second
+	maxErrorBodyBytes = 1 << 16
 )
 
 // Firewall is a client for the Silmaril Firewall /classify endpoint.
 // Instances are safe for concurrent use.
 type Firewall struct {
-	apiKey         string
-	apiURL         string
-	threshold      float64
-	timeout        time.Duration
-	hookThresholds map[HookLabel]float64
-	httpClient     *http.Client
+	apiKey           string
+	apiURL           string
+	threshold        float64
+	hookThresholds   map[HookLabel]float64
+	httpClient       *http.Client
+	maxRetries       int
+	retryBaseBackoff time.Duration
+	retryMaxBackoff  time.Duration
+	retryJitter      func(time.Duration) time.Duration
 }
 
 // New constructs a Firewall from Options. Returns an error when APIKey or
@@ -47,16 +45,16 @@ func New(opts Options) (*Firewall, error) {
 	if opts.APIURL == "" {
 		return nil, errors.New("firewall: APIURL is required")
 	}
-	threshold := opts.Threshold
-	if threshold == 0 {
-		threshold = DefaultThreshold
+	threshold := DefaultThreshold
+	if opts.Threshold != nil {
+		threshold = *opts.Threshold
 	}
 	if !validThreshold(threshold) {
 		return nil, fmt.Errorf("firewall: Threshold must be between 0 and 1, got %v", threshold)
 	}
 	timeout := opts.Timeout
-	if timeout == 0 {
-		timeout = defaultTimeout
+	if timeout < 0 {
+		return nil, fmt.Errorf("firewall: Timeout must be non-negative, got %v", timeout)
 	}
 	hookThresholds := make(map[HookLabel]float64, len(opts.HookThresholds))
 	for k, v := range opts.HookThresholds {
@@ -67,15 +65,25 @@ func New(opts Options) (*Firewall, error) {
 	}
 	httpClient := opts.HTTPClient
 	if httpClient == nil {
+		if timeout == 0 {
+			timeout = defaultTimeout
+		}
 		httpClient = &http.Client{Timeout: timeout}
+	} else if timeout != 0 {
+		clone := *httpClient
+		clone.Timeout = timeout
+		httpClient = &clone
 	}
 	return &Firewall{
-		apiKey:         opts.APIKey,
-		apiURL:         opts.APIURL,
-		threshold:      threshold,
-		timeout:        timeout,
-		hookThresholds: hookThresholds,
-		httpClient:     httpClient,
+		apiKey:           opts.APIKey,
+		apiURL:           opts.APIURL,
+		threshold:        threshold,
+		hookThresholds:   hookThresholds,
+		httpClient:       httpClient,
+		maxRetries:       defaultMaxRetries,
+		retryBaseBackoff: time.Second,
+		retryMaxBackoff:  30 * time.Second,
+		retryJitter:      fullJitter,
 	}, nil
 }
 
@@ -123,9 +131,10 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 		return BlockResult{}, err
 	}
 	if len(chunks) == 1 {
+		threshold := f.effectiveThreshold(cfg.hook)
 		payload := singleRequestPayload{
 			Text:      chunks[0],
-			Threshold: f.effectiveThreshold(cfg.hook),
+			Threshold: threshold,
 		}
 		if cfg.hook != "" {
 			payload.Hook = cfg.hook
@@ -137,7 +146,7 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 		if err := f.postJSON(ctx, payload, &resp); err != nil {
 			return BlockResult{}, err
 		}
-		return f.resultForScore(resp.Score, cfg.hook), nil
+		return blockResultFromResponse(resp, threshold)
 	}
 	results, err := f.classifyChunks(ctx, chunks, cfg)
 	if err != nil {
@@ -153,28 +162,79 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 }
 
 func (f *Firewall) classifyChunks(ctx context.Context, chunks []string, cfg classifyConfig) ([]BlockResult, error) {
-	payload := batchRequestPayload{
-		Texts:     chunks,
-		Threshold: f.effectiveThreshold(cfg.hook),
-	}
+	batchOpts := make([]BatchClassifyOption, 0, 3)
 	if cfg.hook != "" {
-		payload.Hooks = repeatHooks(cfg.hook, len(chunks))
+		batchOpts = append(batchOpts, WithBatchHooks(repeatHooks(cfg.hook, len(chunks))))
 	}
 	if cfg.toolName != "" {
-		payload.ToolNames = repeatToolNames(cfg.toolName, len(chunks))
+		batchOpts = append(batchOpts, WithBatchToolNames(repeatToolNames(cfg.toolName, len(chunks))))
+	}
+	batchOpts = append(batchOpts, WithBatchThreshold(f.effectiveThreshold(cfg.hook)))
+	return f.ClassifyBatch(ctx, chunks, batchOpts...)
+}
+
+// ClassifyBatch classifies multiple independent texts in a single request.
+// When hooks or toolNames are provided, their length must equal len(texts).
+func (f *Firewall) ClassifyBatch(ctx context.Context, texts []string, opts ...BatchClassifyOption) ([]BlockResult, error) {
+	var cfg batchClassifyConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	if len(texts) == 0 {
+		return nil, errors.New("firewall: texts must not be empty")
+	}
+	if len(cfg.hooks) != 0 && len(cfg.hooks) != len(texts) {
+		return nil, fmt.Errorf("firewall: hooks length %d does not match texts length %d", len(cfg.hooks), len(texts))
+	}
+	if len(cfg.toolNames) != 0 && len(cfg.toolNames) != len(texts) {
+		return nil, fmt.Errorf("firewall: toolNames length %d does not match texts length %d", len(cfg.toolNames), len(texts))
+	}
+	threshold := f.batchThreshold(cfg)
+	if !validThreshold(threshold) {
+		return nil, fmt.Errorf("firewall: batch threshold must be between 0 and 1, got %v", threshold)
+	}
+	payload := batchRequestPayload{
+		Texts:     texts,
+		Threshold: threshold,
+	}
+	if len(cfg.hooks) > 0 {
+		payload.Hooks = cfg.hooks
+	}
+	if len(cfg.toolNames) > 0 {
+		payload.ToolNames = batchToolNames(cfg.toolNames)
 	}
 	var resp batchResponse
 	if err := f.postJSON(ctx, payload, &resp); err != nil {
 		return nil, err
 	}
-	if len(resp.Predictions) != len(chunks) {
-		return nil, fmt.Errorf("firewall: predictions length %d does not match chunks length %d", len(resp.Predictions), len(chunks))
+	if len(resp.Predictions) != len(texts) {
+		return nil, fmt.Errorf("firewall: predictions length %d does not match texts length %d", len(resp.Predictions), len(texts))
 	}
 	results := make([]BlockResult, len(resp.Predictions))
 	for i, p := range resp.Predictions {
-		results[i] = f.resultForScore(p.Score, cfg.hook)
+		result, err := blockResultFromResponse(p, threshold)
+		if err != nil {
+			return nil, err
+		}
+		results[i] = result
 	}
 	return results, nil
+}
+
+func (f *Firewall) batchThreshold(cfg batchClassifyConfig) float64 {
+	if cfg.threshold != nil {
+		return *cfg.threshold
+	}
+	if len(cfg.hooks) == 0 {
+		return f.threshold
+	}
+	first := cfg.hooks[0]
+	for _, hook := range cfg.hooks[1:] {
+		if hook != first {
+			return f.threshold
+		}
+	}
+	return f.effectiveThreshold(first)
 }
 
 func repeatHooks(hook HookLabel, n int) []HookLabel {
@@ -185,21 +245,42 @@ func repeatHooks(hook HookLabel, n int) []HookLabel {
 	return hooks
 }
 
-func repeatToolNames(toolName string, n int) []*string {
-	names := make([]*string, n)
+func repeatToolNames(toolName string, n int) []string {
+	names := make([]string, n)
 	for i := range names {
-		name := toolName
-		names[i] = &name
+		names[i] = toolName
 	}
 	return names
 }
 
-func (f *Firewall) resultForScore(score float64, hook HookLabel) BlockResult {
-	prediction := PredictionBenign
-	if score >= f.effectiveThreshold(hook) {
-		prediction = PredictionMalicious
+func batchToolNames(names []string) []*string {
+	out := make([]*string, len(names))
+	for i, name := range names {
+		if name == "" {
+			continue
+		}
+		name := name
+		out[i] = &name
 	}
-	return BlockResult{Prediction: prediction, Score: score}
+	return out
+}
+
+func blockResultFromResponse(resp singleResponse, threshold float64) (BlockResult, error) {
+	switch resp.Prediction {
+	case PredictionBenign, PredictionMalicious:
+	case "":
+		resp.Prediction = predictionForScore(resp.Score, threshold)
+	default:
+		return BlockResult{}, fmt.Errorf("firewall: invalid prediction %q", resp.Prediction)
+	}
+	return BlockResult{Prediction: resp.Prediction, Score: resp.Score, Threshold: threshold}, nil
+}
+
+func predictionForScore(score, threshold float64) Prediction {
+	if score >= threshold {
+		return PredictionMalicious
+	}
+	return PredictionBenign
 }
 
 func validThreshold(threshold float64) bool {
@@ -211,7 +292,7 @@ func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
 	if err != nil {
 		return fmt.Errorf("firewall: marshal request: %w", err)
 	}
-	for attempt := 0; attempt <= defaultMaxRetries; attempt++ {
+	for attempt := 0; ; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.apiURL, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("firewall: build request: %w", err)
@@ -223,25 +304,25 @@ func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if attempt < defaultMaxRetries {
-				if err := waitBeforeRetry(ctx, retryDelay(attempt, nil)); err != nil {
+			if attempt < f.maxRetries {
+				if err := waitBeforeRetry(ctx, f.retryDelay(attempt, nil)); err != nil {
 					return err
 				}
 				continue
 			}
-			return err
+			return fmt.Errorf("firewall: request failed: %w", err)
 		}
-		if isRetryableStatus(resp.StatusCode) && attempt < defaultMaxRetries {
-			wait := retryDelay(attempt, resp)
-			resp.Body.Close()
+		if isRetryableStatus(resp.StatusCode) && attempt < f.maxRetries {
+			wait := f.retryDelay(attempt, resp)
+			drainAndClose(resp.Body)
 			if err := waitBeforeRetry(ctx, wait); err != nil {
 				return err
 			}
 			continue
 		}
 		if resp.StatusCode >= 400 {
-			bodyBytes, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+			_ = resp.Body.Close()
 			return &APIError{
 				Status:     resp.StatusCode,
 				StatusText: http.StatusText(resp.StatusCode),
@@ -249,13 +330,12 @@ func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
 			}
 		}
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			return fmt.Errorf("firewall: decode response: %w", err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil
 	}
-	return errors.New("firewall: max retries exceeded")
 }
 
 func isRetryableStatus(status int) bool {
@@ -272,17 +352,44 @@ func isRetryableStatus(status int) bool {
 	}
 }
 
-func retryDelay(attempt int, resp *http.Response) time.Duration {
+func (f *Firewall) retryDelay(attempt int, resp *http.Response) time.Duration {
 	if resp != nil {
 		if delay, ok := retryAfter(resp.Header.Get("Retry-After")); ok {
 			return delay
 		}
 	}
-	delay := retryBaseBackoff * time.Duration(1<<attempt)
-	if delay > retryMaxBackoff {
-		return retryMaxBackoff
+	delay := cappedExponentialBackoff(f.retryBaseBackoff, f.retryMaxBackoff, attempt)
+	if f.retryJitter == nil {
+		return delay
+	}
+	return f.retryJitter(delay)
+}
+
+func cappedExponentialBackoff(base, max time.Duration, attempt int) time.Duration {
+	if base <= 0 {
+		return 0
+	}
+	if max <= 0 {
+		return base
+	}
+	delay := base
+	for i := 0; i < attempt; i++ {
+		if delay >= max/2 {
+			return max
+		}
+		delay *= 2
+	}
+	if delay > max {
+		return max
 	}
 	return delay
+}
+
+func fullJitter(delay time.Duration) time.Duration {
+	if delay <= 0 {
+		return 0
+	}
+	return time.Duration(rand.Int64N(int64(delay)))
 }
 
 func retryAfter(value string) (time.Duration, bool) {
@@ -316,4 +423,9 @@ func waitBeforeRetry(ctx context.Context, wait time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func drainAndClose(body io.ReadCloser) {
+	_, _ = io.Copy(io.Discard, body)
+	_ = body.Close()
 }

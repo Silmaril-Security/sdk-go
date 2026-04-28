@@ -103,15 +103,30 @@ func main() {
 type Options struct {
     APIKey         string                 // required
     APIURL         string                 // required
-    Threshold      float64                // default: DefaultThreshold
-    Timeout        time.Duration          // default: 10s
+    Threshold      *float64               // nil default: DefaultThreshold; pointer to 0 blocks everything
+    Timeout        time.Duration          // default: 10s for the default HTTP client
     HookThresholds map[HookLabel]float64  // default: empty
     HTTPClient     *http.Client           // default: &http.Client{Timeout: Timeout}
 }
 ```
 
 `Classify` sends the effective threshold for the supplied hook to the API and
-returns a prediction computed from the returned score and that threshold.
+returns the server's prediction, score, and applied threshold.
+
+To set a threshold, pass a pointer:
+
+```go
+threshold := 0.0
+fw, err := firewall.New(firewall.Options{
+    APIKey:    apiKey,
+    APIURL:    apiURL,
+    Threshold: &threshold,
+})
+```
+
+When `HTTPClient` is provided, its timeout is preserved unless `Options.Timeout`
+is explicitly non-zero. In that case the SDK clones the client and applies the
+requested timeout without mutating your original client.
 
 ## Hook labels
 
@@ -124,7 +139,12 @@ firewall.HookLLMOutput     // "llm_output"
 firewall.HookUnknown       // "unknown"
 ```
 
-`firewall.DefaultHookThresholds` contains the default score threshold for every hook.
+`firewall.DefaultHookThresholds()` returns a fresh copy of the default score threshold map.
+
+`firewall.PrependHook` and `firewall.PrependToolName` are legacy helpers for
+manual text-prefix integrations. `Classify` and `ClassifyBatch` send hook and
+tool metadata as structured JSON fields, so normal callers should use
+`WithHook`, `WithToolName`, `WithBatchHooks`, and `WithBatchToolNames`.
 
 ## Errors
 
@@ -134,13 +154,32 @@ firewall.HookUnknown       // "unknown"
 
 ## Chunking
 
-Long inputs are chunked client-side into 400-token overlapping windows (64-token overlap). The maximum input is 10,240 tokens. Chunks are sent as an internal batch request, and the highest score is returned. The SDK intentionally exposes only `Classify` so long-input behavior is consistent.
+Long inputs are chunked client-side into 400-token overlapping windows (64-token overlap). The maximum input is 10,240 tokens. Chunks are sent as an internal batch request, and the highest score is returned.
 
 `firewall.ChunkText` is exported if you need to chunk manually.
 
+## Batch Classification
+
+Use `ClassifyBatch` to classify multiple independent texts in one round-trip:
+
+```go
+results, err := fw.ClassifyBatch(ctx,
+    []string{text1, text2, text3},
+    firewall.WithBatchHooks([]firewall.HookLabel{
+        firewall.HookToolResponse,
+        firewall.HookToolResponse,
+        firewall.HookToolResponse,
+    }),
+)
+```
+
+Batch requests carry one threshold. If all batch hooks are the same, the SDK
+uses that hook's effective threshold; mixed-hook batches use the client default
+threshold unless `WithBatchThreshold` is supplied.
+
 ## Retries
 
-Transient transport failures and HTTP 408, 429, 500, 502, 503, and 504 responses are retried with exponential backoff (1s, 2s, 4s, 8s, 16s, capped at 30s) up to 5 times. `Retry-After` is honored when present. Context cancellation aborts pending backoff.
+Transient transport failures and HTTP 408, 429, 500, 502, 503, and 504 responses are retried with exponential backoff capped at 30s and full jitter, up to 5 times. `Retry-After` is honored when present. Context cancellation aborts pending backoff.
 
 ## Development
 

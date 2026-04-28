@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,30 @@ import (
 	"testing"
 	"time"
 )
+
+func float64Ptr(v float64) *float64 { return &v }
+
+func noJitter(delay time.Duration) time.Duration { return delay }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type trackingBody struct {
+	reader *strings.Reader
+	closed bool
+}
+
+func (b *trackingBody) Read(p []byte) (int, error) {
+	return b.reader.Read(p)
+}
+
+func (b *trackingBody) Close() error {
+	b.closed = true
+	return nil
+}
 
 func TestNewRequiresAPIKey(t *testing.T) {
 	if _, err := New(Options{APIURL: "https://example.com"}); err == nil {
@@ -27,8 +52,51 @@ func TestNewRequiresAPIURL(t *testing.T) {
 }
 
 func TestNewDefaults(t *testing.T) {
-	if _, err := New(Options{APIKey: "sk", APIURL: "https://example.com"}); err != nil {
+	fw, err := New(Options{APIKey: "sk", APIURL: "https://example.com"})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if fw.threshold != DefaultThreshold {
+		t.Errorf("threshold = %v, want %v", fw.threshold, DefaultThreshold)
+	}
+	if fw.httpClient.Timeout != defaultTimeout {
+		t.Errorf("timeout = %v, want %v", fw.httpClient.Timeout, defaultTimeout)
+	}
+}
+
+func TestNewHonorsExplicitZeroThreshold(t *testing.T) {
+	fw, err := New(Options{
+		APIKey:    "sk",
+		APIURL:    "https://example.com",
+		Threshold: float64Ptr(0),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fw.threshold != 0 {
+		t.Errorf("threshold = %v, want 0", fw.threshold)
+	}
+}
+
+func TestNewAppliesTimeoutToCustomHTTPClientClone(t *testing.T) {
+	custom := &http.Client{Timeout: time.Minute}
+	fw, err := New(Options{
+		APIKey:     "sk",
+		APIURL:     "https://example.com",
+		Timeout:    2 * time.Second,
+		HTTPClient: custom,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fw.httpClient == custom {
+		t.Fatal("expected custom HTTP client to be cloned when Timeout is explicit")
+	}
+	if fw.httpClient.Timeout != 2*time.Second {
+		t.Errorf("timeout = %v, want 2s", fw.httpClient.Timeout)
+	}
+	if custom.Timeout != time.Minute {
+		t.Errorf("custom client mutated: timeout = %v", custom.Timeout)
 	}
 }
 
@@ -62,6 +130,9 @@ func TestClassifySingleHappyPath(t *testing.T) {
 	if res.Prediction != PredictionMalicious || res.Score != 0.95 {
 		t.Errorf("result = %+v", res)
 	}
+	if res.Threshold != DefaultThreshold {
+		t.Errorf("result threshold = %v, want %v", res.Threshold, DefaultThreshold)
+	}
 	if gotPayload.Text != "hello" || gotPayload.Hook != HookUserInput || gotPayload.ToolName != "cal" {
 		t.Errorf("payload = %+v", gotPayload)
 	}
@@ -90,6 +161,54 @@ func TestClassifyNoOptionsOmitsHookAndToolName(t *testing.T) {
 	}
 }
 
+func TestClassifyBatchHappyPath(t *testing.T) {
+	var gotPayload batchRequestPayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
+		_ = json.NewEncoder(w).Encode(batchResponse{
+			Predictions: []singleResponse{
+				{Prediction: PredictionBenign, Score: 0.1},
+				{Prediction: PredictionMalicious, Score: 0.9},
+			},
+		})
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	results, err := fw.ClassifyBatch(context.Background(), []string{"a", "b"},
+		WithBatchHooks([]HookLabel{HookUserInput, HookUserInput}),
+		WithBatchToolNames([]string{"read_file", ""}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+	if results[0].Prediction != PredictionBenign || results[1].Prediction != PredictionMalicious {
+		t.Errorf("results = %+v", results)
+	}
+	if gotPayload.Threshold != DefaultThreshold {
+		t.Errorf("threshold = %v, want %v", gotPayload.Threshold, DefaultThreshold)
+	}
+	if len(gotPayload.Hooks) != 2 || gotPayload.Hooks[0] != HookUserInput || gotPayload.Hooks[1] != HookUserInput {
+		t.Errorf("hooks = %v", gotPayload.Hooks)
+	}
+	if len(gotPayload.ToolNames) != 2 || gotPayload.ToolNames[0] == nil || *gotPayload.ToolNames[0] != "read_file" || gotPayload.ToolNames[1] != nil {
+		t.Errorf("tool_names = %v", gotPayload.ToolNames)
+	}
+}
+
+func TestClassifyBatchMismatchedHooks(t *testing.T) {
+	fw, _ := New(Options{APIKey: "sk", APIURL: "https://example.com"})
+	_, err := fw.ClassifyBatch(context.Background(), []string{"a", "b"},
+		WithBatchHooks([]HookLabel{HookUserInput}),
+	)
+	if err == nil {
+		t.Error("expected mismatch error")
+	}
+}
+
 func TestClassifyAppliesConfiguredThreshold(t *testing.T) {
 	var gotPayload singleRequestPayload
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -98,7 +217,7 @@ func TestClassifyAppliesConfiguredThreshold(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, Threshold: 0.7})
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, Threshold: float64Ptr(0.7)})
 	result, err := fw.Classify(context.Background(), "borderline", WithHook(HookUserInput))
 	if err != nil {
 		t.Fatal(err)
@@ -106,8 +225,11 @@ func TestClassifyAppliesConfiguredThreshold(t *testing.T) {
 	if gotPayload.Threshold != 0.7 {
 		t.Errorf("threshold = %v, want 0.7", gotPayload.Threshold)
 	}
-	if result.Prediction != PredictionBenign {
-		t.Errorf("prediction = %q, want BENIGN", result.Prediction)
+	if result.Prediction != PredictionMalicious {
+		t.Errorf("prediction = %q, want MALICIOUS", result.Prediction)
+	}
+	if result.Threshold != 0.7 {
+		t.Errorf("result threshold = %v, want 0.7", result.Threshold)
 	}
 }
 
@@ -122,7 +244,7 @@ func TestClassifyUsesHookThreshold(t *testing.T) {
 	fw, _ := New(Options{
 		APIKey:         "sk",
 		APIURL:         ts.URL,
-		Threshold:      0.3,
+		Threshold:      float64Ptr(0.3),
 		HookThresholds: map[HookLabel]float64{HookToolResponse: 0.8},
 	})
 	result, err := fw.Classify(context.Background(), "tool output", WithHook(HookToolResponse))
@@ -132,13 +254,29 @@ func TestClassifyUsesHookThreshold(t *testing.T) {
 	if gotPayload.Threshold != 0.8 {
 		t.Errorf("threshold = %v, want 0.8", gotPayload.Threshold)
 	}
+	if result.Prediction != PredictionMalicious {
+		t.Errorf("prediction = %q, want MALICIOUS", result.Prediction)
+	}
+}
+
+func TestClassifyTrustsServerPrediction(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.99})
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, Threshold: float64Ptr(0.5)})
+	result, err := fw.Classify(context.Background(), "server-side benign")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if result.Prediction != PredictionBenign {
 		t.Errorf("prediction = %q, want BENIGN", result.Prediction)
 	}
 }
 
 func TestNewRejectsInvalidThresholds(t *testing.T) {
-	if _, err := New(Options{APIKey: "sk", APIURL: "https://example.com", Threshold: 1.1}); err == nil {
+	if _, err := New(Options{APIKey: "sk", APIURL: "https://example.com", Threshold: float64Ptr(1.1)}); err == nil {
 		t.Fatal("expected invalid threshold error")
 	}
 	if _, err := New(Options{
@@ -151,10 +289,6 @@ func TestNewRejectsInvalidThresholds(t *testing.T) {
 }
 
 func TestClassifyRetriesOn429(t *testing.T) {
-	prev := retryBaseBackoff
-	retryBaseBackoff = time.Millisecond
-	defer func() { retryBaseBackoff = prev }()
-
 	var calls atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if calls.Add(1) < 3 {
@@ -166,6 +300,8 @@ func TestClassifyRetriesOn429(t *testing.T) {
 	defer ts.Close()
 
 	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	fw.retryBaseBackoff = time.Millisecond
+	fw.retryJitter = noJitter
 	res, err := fw.Classify(context.Background(), "hi")
 	if err != nil {
 		t.Fatal(err)
@@ -175,6 +311,42 @@ func TestClassifyRetriesOn429(t *testing.T) {
 	}
 	if got := calls.Load(); got != 3 {
 		t.Errorf("calls = %d, want 3", got)
+	}
+}
+
+func TestClassifyDrainsRetryBody(t *testing.T) {
+	retryBody := &trackingBody{reader: strings.NewReader("retry body")}
+	var calls atomic.Int32
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if calls.Add(1) == 1 {
+				return &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+					Header:     make(http.Header),
+					Body:       retryBody,
+					Request:    req,
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"prediction":"BENIGN","score":0.1}`)),
+				Request:    req,
+			}, nil
+		}),
+	}
+	fw, _ := New(Options{APIKey: "sk", APIURL: "https://example.com", HTTPClient: client})
+	fw.retryBaseBackoff = time.Millisecond
+	fw.retryJitter = noJitter
+
+	if _, err := fw.Classify(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if !retryBody.closed {
+		t.Fatal("retry response body was not closed")
+	}
+	if retryBody.reader.Len() != 0 {
+		t.Fatalf("retry response body was not drained; %d bytes remain", retryBody.reader.Len())
 	}
 }
 
@@ -202,11 +374,28 @@ func TestClassifyNon2xxReturnsAPIError(t *testing.T) {
 	}
 }
 
-func TestClassifyRetriesOnTransient5xx(t *testing.T) {
-	prev := retryBaseBackoff
-	retryBaseBackoff = time.Millisecond
-	defer func() { retryBaseBackoff = prev }()
+func TestClassifyLimitsErrorBody(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(strings.Repeat("x", maxErrorBodyBytes+1024)))
+	}))
+	defer ts.Close()
 
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	_, err := fw.Classify(context.Background(), "hi")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error is not *APIError: %T", err)
+	}
+	if len(apiErr.Body) != maxErrorBodyBytes {
+		t.Errorf("body length = %d, want %d", len(apiErr.Body), maxErrorBodyBytes)
+	}
+}
+
+func TestClassifyRetriesOnTransient5xx(t *testing.T) {
 	var calls atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if calls.Add(1) < 3 {
@@ -218,6 +407,8 @@ func TestClassifyRetriesOnTransient5xx(t *testing.T) {
 	defer ts.Close()
 
 	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	fw.retryBaseBackoff = time.Millisecond
+	fw.retryJitter = noJitter
 	_, err := fw.Classify(context.Background(), "hi")
 	if err != nil {
 		t.Fatal(err)
@@ -227,11 +418,85 @@ func TestClassifyRetriesOnTransient5xx(t *testing.T) {
 	}
 }
 
-func TestClassifyHonorsRetryAfter(t *testing.T) {
-	prev := retryBaseBackoff
-	retryBaseBackoff = time.Hour
-	defer func() { retryBaseBackoff = prev }()
+func TestClassifyRetriesNetworkErrors(t *testing.T) {
+	var calls atomic.Int32
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if calls.Add(1) < 3 {
+				return nil, errors.New("temporary dial failure")
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       io.NopCloser(strings.NewReader(`{"prediction":"BENIGN","score":0.1}`)),
+				Request:    req,
+			}, nil
+		}),
+	}
+	fw, _ := New(Options{APIKey: "sk", APIURL: "https://example.com", HTTPClient: client})
+	fw.retryBaseBackoff = time.Millisecond
+	fw.retryJitter = noJitter
 
+	if _, err := fw.Classify(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Errorf("calls = %d, want 3", got)
+	}
+}
+
+func TestClassifyWrapsFinalNetworkError(t *testing.T) {
+	baseErr := errors.New("dial failure")
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return nil, baseErr
+		}),
+	}
+	fw, _ := New(Options{APIKey: "sk", APIURL: "https://example.com", HTTPClient: client})
+	fw.maxRetries = 2
+	fw.retryBaseBackoff = 0
+
+	_, err := fw.Classify(context.Background(), "hi")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, baseErr) {
+		t.Fatalf("expected wrapped base error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "firewall:") {
+		t.Fatalf("expected firewall prefix, got %v", err)
+	}
+}
+
+func TestClassifyExhaustsRetryableStatus(t *testing.T) {
+	var calls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("unavailable"))
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	fw.retryBaseBackoff = time.Millisecond
+	fw.retryJitter = noJitter
+	_, err := fw.Classify(context.Background(), "hi")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error is not *APIError: %T", err)
+	}
+	if apiErr.Status != http.StatusServiceUnavailable {
+		t.Errorf("Status = %d, want %d", apiErr.Status, http.StatusServiceUnavailable)
+	}
+	if got := calls.Load(); got != int32(defaultMaxRetries+1) {
+		t.Errorf("calls = %d, want %d", got, defaultMaxRetries+1)
+	}
+}
+
+func TestClassifyHonorsRetryAfter(t *testing.T) {
 	var calls atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if calls.Add(1) == 1 {
@@ -244,6 +509,8 @@ func TestClassifyHonorsRetryAfter(t *testing.T) {
 	defer ts.Close()
 
 	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	fw.retryBaseBackoff = time.Hour
+	fw.retryJitter = noJitter
 	if _, err := fw.Classify(context.Background(), "hi"); err != nil {
 		t.Fatal(err)
 	}
@@ -252,11 +519,36 @@ func TestClassifyHonorsRetryAfter(t *testing.T) {
 	}
 }
 
-func TestClassifyContextCancellation(t *testing.T) {
-	prev := retryBaseBackoff
-	retryBaseBackoff = 100 * time.Millisecond
-	defer func() { retryBaseBackoff = prev }()
+func TestRetryAfterHTTPDate(t *testing.T) {
+	when := time.Now().Add(2 * time.Second).UTC().Format(http.TimeFormat)
+	delay, ok := retryAfter(when)
+	if !ok {
+		t.Fatal("expected HTTP-date Retry-After to parse")
+	}
+	if delay <= 0 {
+		t.Errorf("delay = %v, want positive", delay)
+	}
+}
 
+func TestRetryDelayUsesJitter(t *testing.T) {
+	fw, _ := New(Options{APIKey: "sk", APIURL: "https://example.com"})
+	var saw time.Duration
+	fw.retryBaseBackoff = 4 * time.Second
+	fw.retryJitter = func(delay time.Duration) time.Duration {
+		saw = delay
+		return 123 * time.Millisecond
+	}
+
+	got := fw.retryDelay(2, nil)
+	if saw != 16*time.Second {
+		t.Fatalf("jitter saw %v, want 16s", saw)
+	}
+	if got != 123*time.Millisecond {
+		t.Fatalf("delay = %v, want jittered value", got)
+	}
+}
+
+func TestClassifyContextCancellation(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
@@ -266,6 +558,8 @@ func TestClassifyContextCancellation(t *testing.T) {
 	defer cancel()
 
 	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	fw.retryBaseBackoff = 100 * time.Millisecond
+	fw.retryJitter = noJitter
 	_, err := fw.Classify(ctx, "hi")
 	if err == nil {
 		t.Fatal("expected ctx error")
