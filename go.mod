@@ -1,3 +1,3 @@
-module github.com/Silmaril-Security/firewall-sdk-go
+module github.com/Silmaril-Security/sdk-go
 
 go 1.22

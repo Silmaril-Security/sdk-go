@@ -1,7 +1,7 @@
 // Copyright (c) 2024-2026 Silmaril Security Inc. All rights reserved.
 // PROPRIETARY AND CONFIDENTIAL
 
-package silmaril
+package firewall
 
 import "fmt"
 
@@ -26,7 +26,7 @@ func ChunkText(text string) ([]string, error) {
 	n := len(runes)
 	if n > MaxInputChars {
 		return nil, fmt.Errorf(
-			"silmaril: input has ~%d tokens (%d chars); max is %d tokens (%d chars)",
+			"firewall: input has ~%d tokens (%d chars); max is %d tokens (%d chars)",
 			n/CharsPerToken, n, MaxInputTokens, MaxInputChars,
 		)
 	}

@@ -1,7 +1,7 @@
 // Copyright (c) 2024-2026 Silmaril Security Inc. All rights reserved.
 // PROPRIETARY AND CONFIDENTIAL
 
-package silmaril
+package firewall
 
 import (
 	"bytes"
@@ -44,17 +44,17 @@ type Firewall struct {
 // APIURL is empty.
 func New(opts Options) (*Firewall, error) {
 	if opts.APIKey == "" {
-		return nil, errors.New("silmaril: APIKey is required")
+		return nil, errors.New("firewall: APIKey is required")
 	}
 	if opts.APIURL == "" {
-		return nil, errors.New("silmaril: APIURL is required")
+		return nil, errors.New("firewall: APIURL is required")
 	}
 	threshold := opts.Threshold
 	if threshold == 0 {
 		threshold = DefaultThreshold
 	}
 	if !validThreshold(threshold) {
-		return nil, fmt.Errorf("silmaril: Threshold must be between 0 and 1, got %v", threshold)
+		return nil, fmt.Errorf("firewall: Threshold must be between 0 and 1, got %v", threshold)
 	}
 	timeout := opts.Timeout
 	if timeout == 0 {
@@ -63,7 +63,7 @@ func New(opts Options) (*Firewall, error) {
 	hookThresholds := make(map[HookLabel]float64, len(opts.HookThresholds))
 	for k, v := range opts.HookThresholds {
 		if !validThreshold(v) {
-			return nil, fmt.Errorf("silmaril: HookThresholds[%q] must be between 0 and 1, got %v", k, v)
+			return nil, fmt.Errorf("firewall: HookThresholds[%q] must be between 0 and 1, got %v", k, v)
 		}
 		hookThresholds[k] = v
 	}
@@ -194,7 +194,7 @@ func (f *Firewall) classifyChunks(ctx context.Context, chunks []string, cfg clas
 		return nil, err
 	}
 	if len(resp.Predictions) != len(chunks) {
-		return nil, fmt.Errorf("silmaril: predictions length %d does not match chunks length %d", len(resp.Predictions), len(chunks))
+		return nil, fmt.Errorf("firewall: predictions length %d does not match chunks length %d", len(resp.Predictions), len(chunks))
 	}
 	results := make([]BlockResult, len(resp.Predictions))
 	for i, p := range resp.Predictions {
@@ -235,12 +235,12 @@ func validThreshold(threshold float64) bool {
 func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("silmaril: marshal request: %w", err)
+		return fmt.Errorf("firewall: marshal request: %w", err)
 	}
 	for attempt := 0; attempt <= defaultMaxRetries; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.apiURL, bytes.NewReader(body))
 		if err != nil {
-			return fmt.Errorf("silmaril: build request: %w", err)
+			return fmt.Errorf("firewall: build request: %w", err)
 		}
 		req.Header.Set("x-api-key", f.apiKey)
 		req.Header.Set("content-type", "application/json")
@@ -276,12 +276,12 @@ func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
 		}
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 			resp.Body.Close()
-			return fmt.Errorf("silmaril: decode response: %w", err)
+			return fmt.Errorf("firewall: decode response: %w", err)
 		}
 		resp.Body.Close()
 		return nil
 	}
-	return errors.New("silmaril: max retries exceeded")
+	return errors.New("firewall: max retries exceeded")
 }
 
 func isRetryableStatus(status int) bool {
