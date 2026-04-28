@@ -26,7 +26,7 @@ This SDK provides the low-level Go interface for that workflow:
 This SDK is distributed as a Go module.
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go@v0.1.4
+go get github.com/Silmaril-Security/sdk-go@v0.1.5
 ```
 
 Requires Go 1.22 or later.
@@ -129,9 +129,8 @@ firewall.HookUnknown       // "unknown"
 ## Errors
 
 - `*firewall.APIError`: returned when the firewall API responds with a non-2xx status. Carries `Status`, `StatusText`, `Body`.
-- `*firewall.PromptBlockedError`: returned by higher-level adapters when a prompt meets or exceeds the configured threshold. Carries `Score`, `Threshold`, `PromptText`, `RunID`.
 
-Both satisfy `error` and work with `errors.As`.
+`APIError` satisfies `error` and works with `errors.As`.
 
 ## Chunking
 
