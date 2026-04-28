@@ -27,15 +27,8 @@ func TestNewRequiresAPIURL(t *testing.T) {
 }
 
 func TestNewDefaults(t *testing.T) {
-	fw, err := New(Options{APIKey: "sk", APIURL: "https://example.com"})
-	if err != nil {
+	if _, err := New(Options{APIKey: "sk", APIURL: "https://example.com"}); err != nil {
 		t.Fatal(err)
-	}
-	if fw.Threshold() != DefaultThreshold {
-		t.Errorf("Threshold = %v, want %v", fw.Threshold(), DefaultThreshold)
-	}
-	if fw.ShadowMode() {
-		t.Error("ShadowMode = true, want false")
 	}
 }
 
@@ -141,22 +134,6 @@ func TestClassifyUsesHookThreshold(t *testing.T) {
 	}
 	if result.Prediction != PredictionBenign {
 		t.Errorf("prediction = %q, want BENIGN", result.Prediction)
-	}
-	if fw.EffectiveThreshold(HookUserInput) != 0.3 {
-		t.Errorf("user_input threshold = %v, want 0.3", fw.EffectiveThreshold(HookUserInput))
-	}
-}
-
-func TestShouldBlockHonorsShadowMode(t *testing.T) {
-	result := BlockResult{Prediction: PredictionMalicious, Score: 0.9}
-	fw, _ := New(Options{APIKey: "sk", APIURL: "https://example.com", Threshold: 0.5})
-	if !fw.ShouldBlock(result, HookUserInput) {
-		t.Fatal("ShouldBlock = false, want true")
-	}
-
-	shadow, _ := New(Options{APIKey: "sk", APIURL: "https://example.com", Threshold: 0.5, ShadowMode: true})
-	if shadow.ShouldBlock(result, HookUserInput) {
-		t.Fatal("shadow ShouldBlock = true, want false")
 	}
 }
 
@@ -403,15 +380,20 @@ func TestClassifyLongInputRejectsEmptyChunkPredictions(t *testing.T) {
 
 func TestHookThresholdsCopy(t *testing.T) {
 	custom := map[HookLabel]float64{HookUserInput: 0.3}
-	fw, _ := New(Options{APIKey: "sk", APIURL: "https://x", HookThresholds: custom})
+	var gotPayload singleRequestPayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+	}))
+	defer ts.Close()
 
-	got := fw.HookThresholds()
-	got[HookUserInput] = 0.99
-	if fw.HookThresholds()[HookUserInput] != 0.3 {
-		t.Error("HookThresholds should return a copy, not a reference")
-	}
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, HookThresholds: custom})
 	custom[HookUserInput] = 0.42
-	if fw.HookThresholds()[HookUserInput] != 0.3 {
-		t.Error("Firewall should copy HookThresholds on construction")
+
+	if _, err := fw.Classify(context.Background(), "hello", WithHook(HookUserInput)); err != nil {
+		t.Fatal(err)
+	}
+	if gotPayload.Threshold != 0.3 {
+		t.Errorf("threshold = %v, want 0.3", gotPayload.Threshold)
 	}
 }

@@ -17,7 +17,7 @@ This SDK provides the low-level Go interface for that workflow:
 - Classify user input, tool calls, tool responses, model output, or system
   prompt content.
 - Preserve hook and tool-name context for more accurate decisions.
-- Apply configurable thresholds and shadow-mode blocking semantics.
+- Apply configurable default and per-hook thresholds.
 - Chunk long inputs consistently before they reach the API.
 - Retry transient API Gateway and model-serving failures.
 
@@ -26,7 +26,7 @@ This SDK provides the low-level Go interface for that workflow:
 This SDK is distributed as a Go module.
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go@v0.1.3
+go get github.com/Silmaril-Security/sdk-go@v0.1.4
 ```
 
 Requires Go 1.22 or later.
@@ -106,16 +106,12 @@ type Options struct {
     Threshold      float64                // default: DefaultThreshold
     Timeout        time.Duration          // default: 10s
     HookThresholds map[HookLabel]float64  // default: empty
-    ShadowMode     bool                   // default: false
     HTTPClient     *http.Client           // default: &http.Client{Timeout: Timeout}
 }
 ```
 
 `Classify` sends the effective threshold for the supplied hook to the API and
-returns a prediction computed from the returned score and that threshold. Use
-`fw.EffectiveThreshold(hook)` to inspect the threshold and
-`fw.ShouldBlock(result, hook)` to apply blocking semantics. `ShouldBlock`
-returns `false` when `ShadowMode` is enabled.
+returns a prediction computed from the returned score and that threshold.
 
 ## Hook labels
 
