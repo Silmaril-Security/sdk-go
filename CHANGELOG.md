@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.5
+
+- Removes the unneeded `PromptBlockedError` from the low-level SDK.
+
 ## v0.1.4
 
 - Removes extra exported `Firewall` helper methods from the public API.
