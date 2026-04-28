@@ -56,8 +56,9 @@ func TestDefaultHookThresholds(t *testing.T) {
 		HookUserInput, HookSystemPrompt, HookToolCall,
 		HookToolResponse, HookLLMOutput, HookUnknown,
 	}
+	thresholds := DefaultHookThresholds()
 	for _, label := range labels {
-		v, ok := DefaultHookThresholds[label]
+		v, ok := thresholds[label]
 		if !ok {
 			t.Errorf("DefaultHookThresholds missing %q", label)
 			continue
@@ -66,8 +67,12 @@ func TestDefaultHookThresholds(t *testing.T) {
 			t.Errorf("DefaultHookThresholds[%q] = %v, want 0.5", label, v)
 		}
 	}
-	if len(DefaultHookThresholds) != len(labels) {
-		t.Errorf("DefaultHookThresholds size = %d, want %d", len(DefaultHookThresholds), len(labels))
+	if len(thresholds) != len(labels) {
+		t.Errorf("DefaultHookThresholds size = %d, want %d", len(thresholds), len(labels))
+	}
+	thresholds[HookUserInput] = 0.99
+	if DefaultHookThresholds()[HookUserInput] != 0.5 {
+		t.Error("DefaultHookThresholds should return a copy")
 	}
 }
 

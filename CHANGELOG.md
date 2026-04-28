@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Honors explicit zero thresholds by making `Options.Threshold` optional.
+- Replaces mutable `DefaultHookThresholds` package state with a copy-returning
+  function.
+- Trusts server predictions, carries the applied threshold on `BlockResult`,
+  and exposes `ClassifyBatch`.
+- Adds full-jitter retry backoff, retry body draining, bounded API error body
+  reads, and final network error wrapping.
+
 ## v0.1.5
 
 - Removes the unneeded `PromptBlockedError` from the low-level SDK.

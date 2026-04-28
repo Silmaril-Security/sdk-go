@@ -21,6 +21,9 @@ const (
 // classification. Returns a single-element slice when text fits one
 // window. Returns an error when text exceeds MaxInputChars.
 func ChunkText(text string) ([]string, error) {
+	if len(text) <= ChunkWindowChars {
+		return []string{text}, nil
+	}
 	runes := []rune(text)
 	n := len(runes)
 	if n > MaxInputChars {
@@ -32,7 +35,8 @@ func ChunkText(text string) ([]string, error) {
 	if n <= ChunkWindowChars {
 		return []string{text}, nil
 	}
-	chunks := make([]string, 0)
+	capacity := (n - ChunkOverlapChars + chunkStrideChars - 1) / chunkStrideChars
+	chunks := make([]string, 0, capacity)
 	for start := 0; start < n; start += chunkStrideChars {
 		end := start + ChunkWindowChars
 		if end > n {

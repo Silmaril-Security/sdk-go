@@ -24,9 +24,10 @@ const (
 // as MALICIOUS when no per-hook override is set.
 const DefaultThreshold = 0.5
 
-// DefaultHookThresholds mirrors the per-hook default thresholds shipped by
-// the Python and TypeScript SDKs.
-var DefaultHookThresholds = map[HookLabel]float64{
+// defaultHookThresholds mirrors the per-hook default thresholds shipped by
+// the Python and TypeScript SDKs. Keep it unexported so callers cannot mutate
+// shared package state.
+var defaultHookThresholds = map[HookLabel]float64{
 	HookUserInput:    0.5,
 	HookSystemPrompt: 0.5,
 	HookToolCall:     0.5,
@@ -35,9 +36,21 @@ var DefaultHookThresholds = map[HookLabel]float64{
 	HookUnknown:      0.5,
 }
 
+// DefaultHookThresholds returns a fresh copy of the default threshold map.
+func DefaultHookThresholds() map[HookLabel]float64 {
+	out := make(map[HookLabel]float64, len(defaultHookThresholds))
+	for k, v := range defaultHookThresholds {
+		out[k] = v
+	}
+	return out
+}
+
 // PrependHook returns text prefixed with a [HOOK:<label>] marker so the
 // model can apply stage-dependent scoring. Returns text unchanged when
 // hook is empty or HookUnknown.
+//
+// Deprecated: Classify and ClassifyBatch send hook labels as structured JSON
+// fields. Use WithHook or WithBatchHooks for normal SDK calls.
 func PrependHook(text string, hook HookLabel) string {
 	if hook == "" || hook == HookUnknown {
 		return text
@@ -47,6 +60,9 @@ func PrependHook(text string, hook HookLabel) string {
 
 // PrependToolName returns text prefixed with a [TOOL:<name>] marker for
 // tool-name-aware classification. Returns text unchanged when name is empty.
+//
+// Deprecated: Classify and ClassifyBatch send tool names as structured JSON
+// fields. Use WithToolName or WithBatchToolNames for normal SDK calls.
 func PrependToolName(text, toolName string) string {
 	if toolName == "" {
 		return text
