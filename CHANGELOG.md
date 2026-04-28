@@ -9,6 +9,8 @@
   and exposes `ClassifyBatch`.
 - Adds full-jitter retry backoff, retry body draining, bounded API error body
   reads, and final network error wrapping.
+- Moves the SDK package into `firewall/`, with import path
+  `github.com/Silmaril-Security/sdk-go/firewall`.
 
 ## v0.1.5
 

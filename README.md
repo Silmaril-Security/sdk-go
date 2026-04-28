@@ -9,7 +9,8 @@ data access. This package is the Go client for calling the Silmaril `/classify`
 API from application code.
 
 Language SDK repositories follow the `sdk-<language>` naming pattern. The Go
-package itself is imported as `firewall`.
+client package lives in `firewall/` and is imported from
+`github.com/Silmaril-Security/sdk-go/firewall`.
 
 This SDK provides the low-level Go interface for that workflow:
 
@@ -26,14 +27,14 @@ This SDK provides the low-level Go interface for that workflow:
 This SDK is distributed as a Go module.
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go@v0.1.5
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.1.5
 ```
 
 Requires Go 1.22 or later.
 
-The module path is `github.com/Silmaril-Security/sdk-go`. The Go package name
-is `firewall`, so call sites use `firewall.New`, `firewall.Options`, and
-`firewall.WithHook`.
+The module path is `github.com/Silmaril-Security/sdk-go`. The SDK import path
+is `github.com/Silmaril-Security/sdk-go/firewall`, so call sites use
+`firewall.New`, `firewall.Options`, and `firewall.WithHook`.
 
 ## Configuration
 
@@ -62,7 +63,7 @@ import (
     "log"
     "os"
 
-    "github.com/Silmaril-Security/sdk-go"
+    "github.com/Silmaril-Security/sdk-go/firewall"
 )
 
 func main() {

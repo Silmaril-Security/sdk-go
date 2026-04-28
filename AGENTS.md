@@ -16,9 +16,10 @@ go mod tidy
 
 - Keep the SDK standard-library only.
 - Preserve the `/classify` API Gateway wire contract.
-- Keep `Classify` as the single public classification API.
+- Keep public SDK code under `firewall/`; keep runnable samples under
+  `examples/`.
+- Keep `Classify` and `ClassifyBatch` as the public classification APIs.
 - Long inputs must be chunked client-side with the same constants as the Python
   and TypeScript SDKs.
 - Do not commit API keys, tenant-specific benchmark notebooks, or deployment
   credentials.
-
