@@ -28,8 +28,18 @@ This SDK provides the low-level Go interface for that workflow:
 This SDK is distributed as a Go module.
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@main
+go get github.com/Silmaril-Security/sdk-go/firewall@latest
 ```
+
+For reproducible installs, pin a tagged release:
+
+```sh
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.1.6
+```
+
+Use `@main` only when you intentionally want the current branch tip. Go resolves
+that once to a pinned pseudo-version in `go.mod`; it does not keep floating
+forward on future builds.
 
 Requires Go 1.22 or later.
 
