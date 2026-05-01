@@ -144,6 +144,38 @@ func TestClassifySingleHappyPath(t *testing.T) {
 	}
 }
 
+func TestClassifyDecodesOptionalSapphireFields(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(singleResponse{
+			Prediction:     PredictionMalicious,
+			Score:          0.91,
+			PrimaryOutcome: "secret_exposure",
+			OutcomeScores:  map[string]float64{"secret_exposure": 0.8},
+			DetectorScores: map[string]float64{"secret_exposure": 1.0},
+			DetectorCounts: map[string]int{"secret_exposure": 2},
+		})
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
+	res, err := fw.Classify(context.Background(), "leak token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PrimaryOutcome != "secret_exposure" {
+		t.Errorf("primary outcome = %q", res.PrimaryOutcome)
+	}
+	if res.OutcomeScores["secret_exposure"] != 0.8 {
+		t.Errorf("outcome scores = %+v", res.OutcomeScores)
+	}
+	if res.DetectorScores["secret_exposure"] != 1.0 {
+		t.Errorf("detector scores = %+v", res.DetectorScores)
+	}
+	if res.DetectorCounts["secret_exposure"] != 2 {
+		t.Errorf("detector counts = %+v", res.DetectorCounts)
+	}
+}
+
 func TestClassifyNoOptionsOmitsHookAndToolName(t *testing.T) {
 	var raw map[string]any
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -200,6 +232,46 @@ func TestClassifyBatchHappyPath(t *testing.T) {
 	}
 	if len(gotPayload.ToolNames) != 2 || gotPayload.ToolNames[0] == nil || *gotPayload.ToolNames[0] != "read_file" || gotPayload.ToolNames[1] != nil {
 		t.Errorf("tool_names = %v", gotPayload.ToolNames)
+	}
+}
+
+func TestClassifyBatchDecodesOptionalSapphireFields(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(batchResponse{
+			Predictions: []singleResponse{
+				{Prediction: PredictionBenign, Score: 0.1},
+				{
+					Prediction:     PredictionMalicious,
+					Score:          0.9,
+					PrimaryOutcome: "system_compromise",
+					OutcomeScores:  map[string]float64{"system_compromise": 0.92},
+					DetectorScores: map[string]float64{"information_disclosure": 0.85},
+					DetectorCounts: map[string]int{"information_disclosure": 1},
+				},
+			},
+		})
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
+	results, err := fw.ClassifyBatch(context.Background(), []string{"a", "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if results[0].PrimaryOutcome != "" || results[0].OutcomeScores != nil {
+		t.Errorf("unexpected Sapphire fields on binary result: %+v", results[0])
+	}
+	if results[1].PrimaryOutcome != "system_compromise" {
+		t.Errorf("primary outcome = %q", results[1].PrimaryOutcome)
+	}
+	if results[1].OutcomeScores["system_compromise"] != 0.92 {
+		t.Errorf("outcome scores = %+v", results[1].OutcomeScores)
+	}
+	if results[1].DetectorScores["information_disclosure"] != 0.85 {
+		t.Errorf("detector scores = %+v", results[1].DetectorScores)
+	}
+	if results[1].DetectorCounts["information_disclosure"] != 1 {
+		t.Errorf("detector counts = %+v", results[1].DetectorCounts)
 	}
 }
 

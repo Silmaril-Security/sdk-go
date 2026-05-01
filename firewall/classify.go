@@ -23,8 +23,12 @@ type batchRequestPayload struct {
 }
 
 type singleResponse struct {
-	Prediction Prediction `json:"prediction"`
-	Score      float64    `json:"score"`
+	Prediction     Prediction         `json:"prediction"`
+	Score          float64            `json:"score"`
+	PrimaryOutcome string             `json:"primary_outcome"`
+	OutcomeScores  map[string]float64 `json:"outcome_scores"`
+	DetectorScores map[string]float64 `json:"detector_scores"`
+	DetectorCounts map[string]int     `json:"detector_counts"`
 }
 
 type batchResponse struct {
@@ -290,7 +294,15 @@ func blockResultFromResponse(resp singleResponse, threshold float64) (BlockResul
 	default:
 		return BlockResult{}, fmt.Errorf("firewall: invalid prediction %q", resp.Prediction)
 	}
-	return BlockResult{Prediction: resp.Prediction, Score: resp.Score, Threshold: threshold}, nil
+	return BlockResult{
+		Prediction:     resp.Prediction,
+		Score:          resp.Score,
+		Threshold:      threshold,
+		PrimaryOutcome: resp.PrimaryOutcome,
+		OutcomeScores:  resp.OutcomeScores,
+		DetectorScores: resp.DetectorScores,
+		DetectorCounts: resp.DetectorCounts,
+	}, nil
 }
 
 func predictionForScore(score, threshold float64) Prediction {
