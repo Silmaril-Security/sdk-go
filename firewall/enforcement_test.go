@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -104,6 +105,30 @@ func TestClassifyShadowModeSuppressesPromptBlockedError(t *testing.T) {
 	}
 }
 
+func TestClassifyEventUsesSanitizedText(t *testing.T) {
+	ts := newSingleResponseServer(t, PredictionBenign, 0.1)
+	defer ts.Close()
+
+	var event ClassifyEvent
+	fw, err := New(Options{
+		APIKey: "sk",
+		APIURL: ts.URL,
+		OnClassify: func(e ClassifyEvent) {
+			event = e
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := fw.Classify(context.Background(), "bad "+string([]byte{0xff})+" value"); err != nil {
+		t.Fatal(err)
+	}
+	if event.Text != "bad  value" {
+		t.Fatalf("event text = %q", event.Text)
+	}
+}
+
 func TestClassifyPerCallShadowModeCanObserve(t *testing.T) {
 	ts := newSingleResponseServer(t, PredictionMalicious, 0.9)
 	defer ts.Close()
@@ -153,18 +178,25 @@ func TestClassifyPerCallShadowModeCanEnforce(t *testing.T) {
 }
 
 func TestClassifyLongInputBlocksOnceUsingHighestScore(t *testing.T) {
-	var receivedBatch batchRequestPayload
+	var mu sync.Mutex
+	var received []singleRequestPayload
+	var calls int
 	var events []ClassifyEvent
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&receivedBatch); err != nil {
+		var payload singleRequestPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
-		preds := make([]singleResponse, len(receivedBatch.Texts))
-		for i := range preds {
-			preds[i] = singleResponse{Prediction: PredictionBenign, Score: 0.1}
+		mu.Lock()
+		calls++
+		callNumber := calls
+		received = append(received, payload)
+		mu.Unlock()
+		if callNumber == 2 {
+			_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionMalicious, Score: 0.95})
+			return
 		}
-		preds[len(preds)-1] = singleResponse{Prediction: PredictionMalicious, Score: 0.95}
-		_ = json.NewEncoder(w).Encode(batchResponse{Predictions: preds})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
 	}))
 	defer ts.Close()
 
@@ -191,8 +223,8 @@ func TestClassifyLongInputBlocksOnceUsingHighestScore(t *testing.T) {
 	if !errors.As(err, &blockedErr) {
 		t.Fatalf("error is not *PromptBlockedError: %T", err)
 	}
-	if len(receivedBatch.Texts) < 2 {
-		t.Fatalf("expected chunked batch request, got %d chunks", len(receivedBatch.Texts))
+	if len(received) < 2 {
+		t.Fatalf("expected chunked single requests, got %d chunks", len(received))
 	}
 	if len(events) != 1 {
 		t.Fatalf("events = %d, want 1", len(events))

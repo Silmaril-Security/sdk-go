@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 )
 
 type singleRequestPayload struct {
@@ -35,13 +36,15 @@ type batchResponse struct {
 	Predictions []singleResponse `json:"predictions"`
 }
 
-// Classify classifies a single text. Long inputs are chunked client-side
-// and sent as a batch; the highest score across chunks is returned.
+// Classify classifies a single text. Long inputs are chunked client-side and
+// fanned out as bounded parallel single-text requests; the highest score across
+// chunks is returned.
 func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOption) (BlockResult, error) {
 	var cfg classifyConfig
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	text = sanitizeText(text)
 	result, err := f.classifyRaw(ctx, text, cfg)
 	if err != nil {
 		return BlockResult{}, err
@@ -95,15 +98,46 @@ func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg class
 }
 
 func (f *Firewall) classifyChunksRaw(ctx context.Context, chunks []string, cfg classifyConfig) ([]BlockResult, error) {
-	threshold := f.effectiveThreshold(cfg.hook)
-	batchCfg := batchClassifyConfig{threshold: &threshold}
-	if cfg.hook != "" {
-		batchCfg.hooks = repeatHooks(cfg.hook, len(chunks))
+	workers := f.chunkConcurrency
+	if workers > len(chunks) {
+		workers = len(chunks)
 	}
-	if cfg.toolName != "" {
-		batchCfg.toolNames = repeatToolNames(cfg.toolName, len(chunks))
+	results := make([]BlockResult, len(chunks))
+	jobs := make(chan int)
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var firstErr error
+
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for index := range jobs {
+				result, err := f.classifySingleRaw(ctx, chunks[index], cfg)
+				if err != nil {
+					mu.Lock()
+					if firstErr == nil {
+						firstErr = err
+					}
+					mu.Unlock()
+					continue
+				}
+				results[index] = result
+			}
+		}()
 	}
-	return f.classifyBatchRaw(ctx, chunks, batchCfg)
+
+	for i := range chunks {
+		jobs <- i
+	}
+	close(jobs)
+	wg.Wait()
+
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return results, nil
 }
 
 // ClassifyBatch classifies multiple independent texts in a single request.
@@ -113,6 +147,7 @@ func (f *Firewall) ClassifyBatch(ctx context.Context, texts []string, opts ...Ba
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	texts = sanitizeTexts(texts)
 	results, err := f.classifyBatchRaw(ctx, texts, cfg)
 	if err != nil {
 		return nil, err
@@ -139,6 +174,7 @@ func (f *Firewall) ClassifyBatch(ctx context.Context, texts []string, opts ...Ba
 }
 
 func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg batchClassifyConfig) ([]BlockResult, error) {
+	texts = sanitizeTexts(texts)
 	if len(texts) == 0 {
 		return nil, errors.New("firewall: texts must not be empty")
 	}

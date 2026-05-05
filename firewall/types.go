@@ -30,16 +30,18 @@ type BlockResult struct {
 // Threshold is optional; nil falls back to DefaultThreshold, while a pointer
 // to 0 is honored as "block everything". Timeout defaults to 10 seconds for
 // the default HTTP client. When HTTPClient is set, Timeout is applied only
-// when explicitly non-zero, by cloning the provided client.
+// when explicitly non-zero, by cloning the provided client. ChunkConcurrency
+// limits long-input Classify fanout; zero uses DefaultChunkConcurrency.
 type Options struct {
-	APIKey         string
-	APIURL         string
-	Threshold      *float64
-	Timeout        time.Duration
-	HookThresholds map[HookLabel]float64
-	HTTPClient     *http.Client
-	ShadowMode     bool
-	OnClassify     func(ClassifyEvent)
+	APIKey           string
+	APIURL           string
+	Threshold        *float64
+	Timeout          time.Duration
+	ChunkConcurrency int
+	HookThresholds   map[HookLabel]float64
+	HTTPClient       *http.Client
+	ShadowMode       bool
+	OnClassify       func(ClassifyEvent)
 }
 
 type classifyConfig struct {

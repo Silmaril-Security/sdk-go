@@ -53,11 +53,18 @@ func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
 		if resp.StatusCode >= 400 {
 			bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
 			_ = resp.Body.Close()
-			return &APIError{
+			apiErr := &APIError{
 				Status:     resp.StatusCode,
 				StatusText: http.StatusText(resp.StatusCode),
 				Body:       string(bodyBytes),
 			}
+			var parsed struct {
+				Details *MalformedInputDetails `json:"details"`
+			}
+			if err := json.Unmarshal(bodyBytes, &parsed); err == nil {
+				apiErr.Details = parsed.Details
+			}
+			return apiErr
 		}
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 			_ = resp.Body.Close()

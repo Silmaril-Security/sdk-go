@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.7
+
 - Honors explicit zero thresholds by making `Options.Threshold` optional.
 - Replaces mutable `DefaultHookThresholds` package state with a copy-returning
   function.
@@ -9,6 +11,8 @@
   and exposes `ClassifyBatch`.
 - Adds full-jitter retry backoff, retry body draining, bounded API error body
   reads, and final network error wrapping.
+- Fans out long-input `Classify` chunks as bounded parallel single-text
+  requests with `Options.ChunkConcurrency`.
 - Moves the SDK package into `firewall/`, with import path
   `github.com/Silmaril-Security/sdk-go/firewall`.
 - Makes `Classify` and `ClassifyBatch` enforce thresholds by default, with

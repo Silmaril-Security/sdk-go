@@ -34,7 +34,7 @@ go get github.com/Silmaril-Security/sdk-go/firewall@latest
 For reproducible installs, pin a tagged release:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.1.6
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.1.7
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -121,6 +121,7 @@ type Options struct {
     APIURL         string                 // required
     Threshold      *float64               // nil default: DefaultThreshold; pointer to 0 blocks everything
     Timeout        time.Duration          // default: 10s for the default HTTP client
+    ChunkConcurrency int                  // default: 8; long-input classify chunk fanout limit
     HookThresholds map[HookLabel]float64  // default: empty
     HTTPClient     *http.Client           // default: &http.Client{Timeout: Timeout}
     ShadowMode     bool                   // default: false; classify calls observe without blocking when true
@@ -225,7 +226,14 @@ All error types satisfy `error` and work with `errors.As`.
 
 ## Chunking
 
-Long inputs are chunked client-side into 400-token overlapping windows (64-token overlap). The maximum input is 10,240 tokens. Chunks are sent as an internal batch request, and the highest score is returned.
+Long inputs are chunked client-side into 400-token overlapping windows
+(64-token overlap). The maximum input is 10,240 tokens. For `Classify`, chunks
+are sent as bounded parallel single-text requests using `Options.ChunkConcurrency`
+(default: 8), letting API Gateway and SageMaker distribute work across serving
+instances. The highest score is returned.
+
+Set `ChunkConcurrency: 1` to send chunk requests sequentially. `ClassifyBatch`
+continues to send independent texts as one batch request.
 
 `firewall.ChunkText` is exported if you need to chunk manually.
 

@@ -6,6 +6,7 @@ import (
 	"math"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestChunkingConstantsMatchTypeScriptSDK(t *testing.T) {
@@ -163,5 +164,26 @@ func TestChunkTextMultibyteRunes(t *testing.T) {
 	}
 	if len(chunks) != 1 || chunks[0] != text {
 		t.Errorf("multibyte: got %v", chunks)
+	}
+}
+
+func TestSanitizeTextDropsInvalidUTF8Bytes(t *testing.T) {
+	text := "a" + string([]byte{0xff}) + "b" + "\uFFFD"
+	got := sanitizeText(text)
+	if got != "ab\uFFFD" {
+		t.Fatalf("sanitizeText = %q, want %q", got, "ab\uFFFD")
+	}
+	if !utf8.ValidString(got) {
+		t.Fatal("sanitizeText returned invalid UTF-8")
+	}
+}
+
+func TestChunkTextSanitizesInvalidUTF8(t *testing.T) {
+	chunks, err := ChunkText("bad " + string([]byte{0xff}) + " value")
+	if err != nil {
+		t.Fatalf("ChunkText: %v", err)
+	}
+	if len(chunks) != 1 || chunks[0] != "bad  value" {
+		t.Fatalf("chunks = %q", chunks)
 	}
 }

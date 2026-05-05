@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -64,6 +65,37 @@ func TestNewDefaults(t *testing.T) {
 	}
 	if fw.shadowMode {
 		t.Error("shadowMode = true, want false")
+	}
+	if fw.chunkConcurrency != DefaultChunkConcurrency {
+		t.Errorf("chunkConcurrency = %d, want %d", fw.chunkConcurrency, DefaultChunkConcurrency)
+	}
+}
+
+func TestNewHonorsChunkConcurrency(t *testing.T) {
+	fw, err := New(Options{
+		APIKey:           "sk",
+		APIURL:           "https://example.com",
+		ChunkConcurrency: 3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fw.chunkConcurrency != 3 {
+		t.Errorf("chunkConcurrency = %d, want 3", fw.chunkConcurrency)
+	}
+}
+
+func TestNewRejectsNegativeChunkConcurrency(t *testing.T) {
+	_, err := New(Options{
+		APIKey:           "sk",
+		APIURL:           "https://example.com",
+		ChunkConcurrency: -1,
+	})
+	if err == nil {
+		t.Fatal("expected error for negative ChunkConcurrency")
+	}
+	if !strings.Contains(err.Error(), "ChunkConcurrency must be non-negative") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -141,6 +173,23 @@ func TestClassifySingleHappyPath(t *testing.T) {
 	}
 	if gotPayload.Threshold != DefaultThreshold {
 		t.Errorf("threshold = %v, want %v", gotPayload.Threshold, DefaultThreshold)
+	}
+}
+
+func TestClassifySanitizesInvalidUTF8Payload(t *testing.T) {
+	var gotPayload singleRequestPayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	if _, err := fw.Classify(context.Background(), "bad "+string([]byte{0xff})+" value"); err != nil {
+		t.Fatal(err)
+	}
+	if gotPayload.Text != "bad  value" {
+		t.Fatalf("payload text = %q", gotPayload.Text)
 	}
 }
 
@@ -232,6 +281,28 @@ func TestClassifyBatchHappyPath(t *testing.T) {
 	}
 	if len(gotPayload.ToolNames) != 2 || gotPayload.ToolNames[0] == nil || *gotPayload.ToolNames[0] != "read_file" || gotPayload.ToolNames[1] != nil {
 		t.Errorf("tool_names = %v", gotPayload.ToolNames)
+	}
+}
+
+func TestClassifyBatchSanitizesInvalidUTF8Payload(t *testing.T) {
+	var gotPayload batchRequestPayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
+		_ = json.NewEncoder(w).Encode(batchResponse{
+			Predictions: []singleResponse{
+				{Prediction: PredictionBenign, Score: 0.1},
+				{Prediction: PredictionBenign, Score: 0.2},
+			},
+		})
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	if _, err := fw.ClassifyBatch(context.Background(), []string{"bad " + string([]byte{0xff}), "ok 😀"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotPayload.Texts) != 2 || gotPayload.Texts[0] != "bad " || gotPayload.Texts[1] != "ok 😀" {
+		t.Fatalf("payload texts = %#v", gotPayload.Texts)
 	}
 }
 
@@ -450,6 +521,33 @@ func TestClassifyNon2xxReturnsAPIError(t *testing.T) {
 	}
 }
 
+func TestClassifyNon2xxParsesMalformedDetails(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"MalformedInput","message":"Input contains malformed text that could not be tokenized","details":{"field":"texts[0]","inputIndex":0,"charOffset":12,"malformedToken":"\\uD83D","codePoint":"U+D83D","reason":"lone_high_surrogate"}}`))
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	_, err := fw.Classify(context.Background(), "hi")
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error is not *APIError: %T", err)
+	}
+	if apiErr.Details == nil {
+		t.Fatal("Details is nil")
+	}
+	if apiErr.Details.Field != "texts[0]" || apiErr.Details.MalformedToken != "\\uD83D" {
+		t.Fatalf("Details = %+v", apiErr.Details)
+	}
+	if apiErr.Details.InputIndex == nil || *apiErr.Details.InputIndex != 0 {
+		t.Fatalf("InputIndex = %v", apiErr.Details.InputIndex)
+	}
+}
+
 func TestClassifyLimitsErrorBody(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -646,18 +744,25 @@ func TestClassifyContextCancellation(t *testing.T) {
 }
 
 func TestClassifyChunksLongInputAndPicksMaxScore(t *testing.T) {
-	var receivedBatch batchRequestPayload
 	var calls atomic.Int32
+	var mu sync.Mutex
+	var received []singleRequestPayload
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls.Add(1)
-		_ = json.NewDecoder(r.Body).Decode(&receivedBatch)
-		preds := make([]singleResponse, len(receivedBatch.Texts))
-		for i := range preds {
-			preds[i] = singleResponse{Prediction: PredictionBenign, Score: 0.1}
+		callNumber := int(calls.Add(1))
+		var payload singleRequestPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
 		}
-		preds[len(preds)-1].Score = 0.95
-		preds[len(preds)-1].Prediction = PredictionMalicious
-		_ = json.NewEncoder(w).Encode(batchResponse{Predictions: preds})
+		mu.Lock()
+		received = append(received, payload)
+		mu.Unlock()
+		score := 0.1
+		prediction := PredictionBenign
+		if callNumber == 2 {
+			score = 0.95
+			prediction = PredictionMalicious
+		}
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: prediction, Score: score})
 	}))
 	defer ts.Close()
 
@@ -670,31 +775,37 @@ func TestClassifyChunksLongInputAndPicksMaxScore(t *testing.T) {
 	if res.Prediction != PredictionMalicious || res.Score != 0.95 {
 		t.Errorf("result = %+v", res)
 	}
-	if len(receivedBatch.Texts) < 2 {
-		t.Errorf("expected multiple chunks, got %d", len(receivedBatch.Texts))
+	if len(received) < 2 {
+		t.Errorf("expected multiple chunk requests, got %d", len(received))
 	}
-	if receivedBatch.Threshold != DefaultThreshold {
-		t.Errorf("threshold = %v, want %v", receivedBatch.Threshold, DefaultThreshold)
-	}
-	for _, h := range receivedBatch.Hooks {
-		if h != HookUserInput {
-			t.Errorf("hook = %q, want %q", h, HookUserInput)
+	for _, payload := range received {
+		if payload.Threshold != DefaultThreshold {
+			t.Errorf("threshold = %v, want %v", payload.Threshold, DefaultThreshold)
+		}
+		if payload.Hook != HookUserInput {
+			t.Errorf("hook = %q, want %q", payload.Hook, HookUserInput)
+		}
+		if payload.Text == "" {
+			t.Error("chunk text is empty")
 		}
 	}
-	if got := calls.Load(); got != 1 {
-		t.Errorf("HTTP calls = %d, want 1 batch request", got)
+	if got := calls.Load(); got < 2 {
+		t.Errorf("HTTP calls = %d, want multiple single requests", got)
 	}
 }
 
 func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
-	var receivedBatch batchRequestPayload
+	var mu sync.Mutex
+	var received []singleRequestPayload
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&receivedBatch)
-		preds := make([]singleResponse, len(receivedBatch.Texts))
-		for i := range preds {
-			preds[i] = singleResponse{Prediction: PredictionBenign, Score: 0.1}
+		var payload singleRequestPayload
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
 		}
-		_ = json.NewEncoder(w).Encode(batchResponse{Predictions: preds})
+		mu.Lock()
+		received = append(received, payload)
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
 	}))
 	defer ts.Close()
 
@@ -709,42 +820,77 @@ func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(receivedBatch.Texts) < 2 {
-		t.Fatalf("expected multiple chunks, got %d", len(receivedBatch.Texts))
+	if len(received) < 2 {
+		t.Fatalf("expected multiple chunk requests, got %d", len(received))
 	}
-	if len(receivedBatch.Hooks) != len(receivedBatch.Texts) {
-		t.Fatalf("hooks length = %d, want %d", len(receivedBatch.Hooks), len(receivedBatch.Texts))
-	}
-	if len(receivedBatch.ToolNames) != len(receivedBatch.Texts) {
-		t.Fatalf("tool_names length = %d, want %d", len(receivedBatch.ToolNames), len(receivedBatch.Texts))
-	}
-	if receivedBatch.Threshold != DefaultThreshold {
-		t.Errorf("threshold = %v, want %v", receivedBatch.Threshold, DefaultThreshold)
-	}
-	for i := range receivedBatch.Texts {
-		if receivedBatch.Hooks[i] != HookToolResponse {
-			t.Errorf("hook[%d] = %q, want %q", i, receivedBatch.Hooks[i], HookToolResponse)
+	for i, payload := range received {
+		if payload.Hook != HookToolResponse {
+			t.Errorf("hook[%d] = %q, want %q", i, payload.Hook, HookToolResponse)
 		}
-		if receivedBatch.ToolNames[i] == nil || *receivedBatch.ToolNames[i] != "fetch_webpage" {
-			t.Errorf("tool_names[%d] = %v, want fetch_webpage", i, receivedBatch.ToolNames[i])
+		if payload.ToolName != "fetch_webpage" {
+			t.Errorf("tool_name[%d] = %q, want fetch_webpage", i, payload.ToolName)
+		}
+		if payload.Threshold != DefaultThreshold {
+			t.Errorf("threshold[%d] = %v, want %v", i, payload.Threshold, DefaultThreshold)
 		}
 	}
 }
 
-func TestClassifyLongInputRejectsEmptyChunkPredictions(t *testing.T) {
+func TestClassifyLongInputPropagatesChunkError(t *testing.T) {
+	var calls atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(batchResponse{Predictions: []singleResponse{}})
+		if calls.Add(1) == 1 {
+			http.Error(w, "boom", http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
 	}))
 	defer ts.Close()
 
-	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
 	long := strings.Repeat("a", ChunkWindowChars*3)
 	_, err := fw.Classify(context.Background(), long)
 	if err == nil {
-		t.Fatal("expected prediction count mismatch error")
+		t.Fatal("expected chunk error")
 	}
-	if !strings.Contains(err.Error(), "predictions length 0") {
-		t.Fatalf("unexpected error: %v", err)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error is not APIError: %T %v", err, err)
+	}
+	if calls.Load() < 2 {
+		t.Fatalf("HTTP calls = %d, want multiple chunk attempts", calls.Load())
+	}
+}
+
+func TestClassifyChunkConcurrencyLimit(t *testing.T) {
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	var calls atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		current := active.Add(1)
+		for {
+			previous := maxActive.Load()
+			if current <= previous || maxActive.CompareAndSwap(previous, current) {
+				break
+			}
+		}
+		calls.Add(1)
+		time.Sleep(10 * time.Millisecond)
+		active.Add(-1)
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ChunkConcurrency: 2, ShadowMode: true})
+	long := strings.Repeat("a", ChunkWindowChars*5)
+	if _, err := fw.Classify(context.Background(), long); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() <= 2 {
+		t.Fatalf("HTTP calls = %d, want more than 2", calls.Load())
+	}
+	if maxActive.Load() > 2 {
+		t.Fatalf("max active requests = %d, want <= 2", maxActive.Load())
 	}
 }
 

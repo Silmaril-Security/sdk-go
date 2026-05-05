@@ -4,12 +4,24 @@ package firewall
 
 import "fmt"
 
+// MalformedInputDetails carries a prompt-minimal diagnostic returned by the API
+// when malformed text still reaches tokenization.
+type MalformedInputDetails struct {
+	Field          string `json:"field,omitempty"`
+	InputIndex     *int   `json:"inputIndex,omitempty"`
+	CharOffset     *int   `json:"charOffset,omitempty"`
+	MalformedToken string `json:"malformedToken,omitempty"`
+	CodePoint      string `json:"codePoint,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+}
+
 // APIError is returned when the firewall API responds with a non-2xx status
 // after any retryable response has been exhausted.
 type APIError struct {
 	Status     int
 	StatusText string
 	Body       string
+	Details    *MalformedInputDetails
 }
 
 func (e *APIError) Error() string {
