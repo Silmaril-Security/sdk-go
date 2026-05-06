@@ -11,8 +11,11 @@ import (
 func TestAPIErrorFormat(t *testing.T) {
 	err := &APIError{Status: 429, StatusText: "Too Many Requests", Body: "rate limit"}
 	msg := err.Error()
-	if !strings.Contains(msg, "429") || !strings.Contains(msg, "Too Many Requests") || !strings.Contains(msg, "rate limit") {
+	if msg != "Silmaril API error 429 Too Many Requests" {
 		t.Errorf("APIError format: %q", msg)
+	}
+	if strings.Contains(msg, err.Body) {
+		t.Fatal("APIError message should not expose the body")
 	}
 }
 

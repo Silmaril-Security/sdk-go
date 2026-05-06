@@ -25,7 +25,10 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
-	return fmt.Sprintf("Silmaril API error %d %s: %s", e.Status, e.StatusText, e.Body)
+	if e.StatusText == "" {
+		return fmt.Sprintf("Silmaril API error %d", e.Status)
+	}
+	return fmt.Sprintf("Silmaril API error %d %s", e.Status, e.StatusText)
 }
 
 // PromptBlockedError is returned by Classify when a classified prompt meets or

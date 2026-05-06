@@ -30,8 +30,10 @@ type BlockResult struct {
 // Threshold is optional; nil falls back to DefaultThreshold, while a pointer
 // to 0 is honored as "block everything". Timeout defaults to 10 seconds for
 // the default HTTP client. When HTTPClient is set, Timeout is applied only
-// when explicitly non-zero, by cloning the provided client. ChunkConcurrency
-// limits long-input Classify fanout; zero uses DefaultChunkConcurrency.
+// when explicitly non-zero, by cloning the provided client. The SDK also
+// installs a no-redirect policy on cloned clients whose CheckRedirect is nil;
+// caller-provided redirect policies are preserved. ChunkConcurrency limits
+// long-input Classify fanout; zero uses DefaultChunkConcurrency.
 type Options struct {
 	APIKey           string
 	APIURL           string

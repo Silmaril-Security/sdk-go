@@ -68,16 +68,21 @@ func New(opts Options) (*Firewall, error) {
 		}
 		hookThresholds[k] = v
 	}
-	httpClient := opts.HTTPClient
-	if httpClient == nil {
+	var httpClient *http.Client
+	if opts.HTTPClient == nil {
 		if timeout == 0 {
 			timeout = defaultTimeout
 		}
 		httpClient = &http.Client{Timeout: timeout}
-	} else if timeout != 0 {
-		clone := *httpClient
-		clone.Timeout = timeout
+	} else {
+		clone := *opts.HTTPClient
+		if timeout != 0 {
+			clone.Timeout = timeout
+		}
 		httpClient = &clone
+	}
+	if httpClient.CheckRedirect == nil {
+		httpClient.CheckRedirect = useLastResponseOnRedirect
 	}
 	return &Firewall{
 		apiKey:           opts.APIKey,
@@ -93,6 +98,10 @@ func New(opts Options) (*Firewall, error) {
 		retryMaxBackoff:  30 * time.Second,
 		retryJitter:      fullJitter,
 	}, nil
+}
+
+func useLastResponseOnRedirect(_ *http.Request, _ []*http.Request) error {
+	return http.ErrUseLastResponse
 }
 
 func (f *Firewall) effectiveThreshold(hook HookLabel) float64 {

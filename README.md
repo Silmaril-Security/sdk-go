@@ -145,9 +145,11 @@ fw, err := firewall.New(firewall.Options{
 })
 ```
 
-When `HTTPClient` is provided, its timeout is preserved unless `Options.Timeout`
-is explicitly non-zero. In that case the SDK clones the client and applies the
-requested timeout without mutating your original client.
+When `HTTPClient` is provided, the SDK clones it without mutating your original
+client. Its timeout is preserved unless `Options.Timeout` is explicitly
+non-zero. If the clone has no `CheckRedirect` policy, the SDK installs a
+no-redirect policy; explicit caller-provided redirect policies are preserved and
+can forward custom headers.
 
 ## Shadow Mode
 
@@ -218,7 +220,7 @@ tool metadata as structured JSON fields, so normal callers should use
 
 ## Errors
 
-- `*firewall.APIError`: returned when the firewall API responds with a non-2xx status. Carries `Status`, `StatusText`, `Body`.
+- `*firewall.APIError`: returned when the firewall API responds with a non-2xx or redirect status. Carries `Status`, `StatusText`, and a 64 KiB-capped `Body`; the default error string omits the body to keep logs clean.
 - `*firewall.PromptBlockedError`: returned by `Classify` in enforcement mode when the score meets or exceeds the effective threshold. Carries `Score`, `Threshold`, `PromptText`, `Hook`, `ToolName`, and `Result`.
 - `*firewall.BatchPromptBlockedError`: returned by `ClassifyBatch` in enforcement mode when one or more inputs meet or exceed the effective threshold. Carries all blocked items with index, text, hook, tool name, and result.
 

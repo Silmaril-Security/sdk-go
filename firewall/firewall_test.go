@@ -135,6 +135,60 @@ func TestNewAppliesTimeoutToCustomHTTPClientClone(t *testing.T) {
 	}
 }
 
+func TestNewInstallsNoRedirectPolicyOnCustomHTTPClientClone(t *testing.T) {
+	custom := &http.Client{Timeout: time.Minute}
+	fw, err := New(Options{
+		APIKey:     "sk",
+		APIURL:     "https://example.com",
+		HTTPClient: custom,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fw.httpClient == custom {
+		t.Fatal("expected custom HTTP client to be cloned")
+	}
+	if fw.httpClient.Timeout != time.Minute {
+		t.Errorf("timeout = %v, want %v", fw.httpClient.Timeout, time.Minute)
+	}
+	if fw.httpClient.CheckRedirect == nil {
+		t.Fatal("expected hardened redirect policy")
+	}
+	if custom.CheckRedirect != nil {
+		t.Fatal("custom client was mutated")
+	}
+}
+
+func TestNewPreservesExplicitCheckRedirect(t *testing.T) {
+	var called atomic.Bool
+	custom := &http.Client{
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			called.Store(true)
+			return http.ErrUseLastResponse
+		},
+	}
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("redirect target should not be reached")
+	}))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	fw, err := New(Options{APIKey: "sk", APIURL: redirector.URL, HTTPClient: custom})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fw.Classify(context.Background(), "hi")
+	if err == nil {
+		t.Fatal("expected redirect response to surface as APIError")
+	}
+	if !called.Load() {
+		t.Fatal("custom CheckRedirect was not called")
+	}
+}
+
 func TestClassifySingleHappyPath(t *testing.T) {
 	var gotPayload singleRequestPayload
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -518,6 +572,62 @@ func TestClassifyNon2xxReturnsAPIError(t *testing.T) {
 	}
 	if !strings.Contains(apiErr.Body, "boom") {
 		t.Errorf("Body = %q", apiErr.Body)
+	}
+}
+
+func TestClassifyDoesNotFollowRedirects(t *testing.T) {
+	var targetHit atomic.Bool
+	var leakedKey atomic.Value
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit.Store(true)
+		leakedKey.Store(r.Header.Get("x-api-key"))
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+	}))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	fw, _ := New(Options{APIKey: "sk-secret", APIURL: redirector.URL})
+	_, err := fw.Classify(context.Background(), "hi")
+	if err == nil {
+		t.Fatal("expected redirect response to surface as APIError")
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error is not *APIError: %T", err)
+	}
+	if apiErr.Status != http.StatusFound {
+		t.Errorf("Status = %d, want %d", apiErr.Status, http.StatusFound)
+	}
+	if targetHit.Load() {
+		t.Fatalf("redirect target was reached with x-api-key %q", leakedKey.Load())
+	}
+}
+
+func TestClassifyCustomClientDoesNotFollowRedirectsWhenUnset(t *testing.T) {
+	var targetHit atomic.Bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		targetHit.Store(true)
+	}))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusFound)
+	}))
+	defer redirector.Close()
+
+	custom := &http.Client{}
+	fw, _ := New(Options{APIKey: "sk-secret", APIURL: redirector.URL, HTTPClient: custom})
+	_, err := fw.Classify(context.Background(), "hi")
+	if err == nil {
+		t.Fatal("expected redirect response to surface as APIError")
+	}
+	if targetHit.Load() {
+		t.Fatal("redirect target was reached")
+	}
+	if custom.CheckRedirect != nil {
+		t.Fatal("custom client was mutated")
 	}
 }
 
