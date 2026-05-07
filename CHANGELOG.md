@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## v0.2.1
+## v0.3.0
 
 - Removes customer-facing threshold configuration from `Options` and batch
   calls.

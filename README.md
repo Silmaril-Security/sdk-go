@@ -34,7 +34,7 @@ go get github.com/Silmaril-Security/sdk-go/firewall@latest
 For reproducible installs, pin a tagged release:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.2.1
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.3.0
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -265,7 +265,7 @@ Batch requests carry one internal threshold based on batch size.
 
 ## Migration Notes
 
-Version `0.2.1` removes customer-facing `Options.Threshold`,
+Version `0.3.0` removes customer-facing `Options.Threshold`,
 `Options.HookThresholds`, and `WithBatchThreshold`. Existing enforcement,
 shadow mode, hook metadata, result threshold diagnostics, and typed blocking
 errors remain available.
