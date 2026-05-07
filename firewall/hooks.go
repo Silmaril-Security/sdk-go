@@ -20,31 +20,6 @@ const (
 	HookUnknown      HookLabel = "unknown"
 )
 
-// DefaultThreshold is the score at or above which a prediction is treated
-// as MALICIOUS when no per-hook override is set.
-const DefaultThreshold = 0.5
-
-// defaultHookThresholds mirrors the per-hook default thresholds shipped by
-// the Python and TypeScript SDKs. Keep it unexported so callers cannot mutate
-// shared package state.
-var defaultHookThresholds = map[HookLabel]float64{
-	HookUserInput:    0.5,
-	HookSystemPrompt: 0.5,
-	HookToolCall:     0.5,
-	HookToolResponse: 0.5,
-	HookLLMOutput:    0.5,
-	HookUnknown:      0.5,
-}
-
-// DefaultHookThresholds returns a fresh copy of the default threshold map.
-func DefaultHookThresholds() map[HookLabel]float64 {
-	out := make(map[HookLabel]float64, len(defaultHookThresholds))
-	for k, v := range defaultHookThresholds {
-		out[k] = v
-	}
-	return out
-}
-
 // PrependHook returns text prefixed with a [HOOK:<label>] marker so the
 // model can apply stage-dependent scoring. Returns text unchanged when
 // hook is empty or HookUnknown.

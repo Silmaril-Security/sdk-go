@@ -27,20 +27,17 @@ type BlockResult struct {
 }
 
 // Options configures a Firewall client. APIKey and APIURL are required.
-// Threshold is optional; nil falls back to DefaultThreshold, while a pointer
-// to 0 is honored as "block everything". Timeout defaults to 10 seconds for
-// the default HTTP client. When HTTPClient is set, Timeout is applied only
-// when explicitly non-zero, by cloning the provided client. The SDK also
-// installs a no-redirect policy on cloned clients whose CheckRedirect is nil;
-// caller-provided redirect policies are preserved. ChunkConcurrency limits
-// long-input Classify fanout; zero uses DefaultChunkConcurrency.
+// Timeout defaults to 10 seconds for the default HTTP client. When HTTPClient
+// is set, Timeout is applied only when explicitly non-zero, by cloning the
+// provided client. The SDK also installs a no-redirect policy on cloned clients
+// whose CheckRedirect is nil; caller-provided redirect policies are preserved.
+// ChunkConcurrency limits long-input Classify fanout; zero uses
+// DefaultChunkConcurrency.
 type Options struct {
 	APIKey           string
 	APIURL           string
-	Threshold        *float64
 	Timeout          time.Duration
 	ChunkConcurrency int
-	HookThresholds   map[HookLabel]float64
 	HTTPClient       *http.Client
 	ShadowMode       bool
 	OnClassify       func(ClassifyEvent)
@@ -74,7 +71,6 @@ func WithShadowMode(enabled bool) ClassifyOption {
 type batchClassifyConfig struct {
 	hooks      []HookLabel
 	toolNames  []string
-	threshold  *float64
 	shadowMode *bool
 }
 
@@ -90,11 +86,6 @@ func WithBatchHooks(hooks []HookLabel) BatchClassifyOption {
 // An empty string at index i omits the tool_name for that text.
 func WithBatchToolNames(names []string) BatchClassifyOption {
 	return func(c *batchClassifyConfig) { c.toolNames = names }
-}
-
-// WithBatchThreshold sets the score threshold sent with a batch request.
-func WithBatchThreshold(threshold float64) BatchClassifyOption {
-	return func(c *batchClassifyConfig) { c.threshold = &threshold }
 }
 
 // WithBatchShadowMode overrides the client-level shadow-mode setting for a

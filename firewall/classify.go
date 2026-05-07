@@ -62,10 +62,11 @@ func (f *Firewall) classifyRaw(ctx context.Context, text string, cfg classifyCon
 	if err != nil {
 		return BlockResult{}, err
 	}
+	threshold := adaptiveThreshold(len(chunks))
 	if len(chunks) == 1 {
-		return f.classifySingleRaw(ctx, chunks[0], cfg)
+		return f.classifySingleRaw(ctx, chunks[0], cfg, threshold)
 	}
-	results, err := f.classifyChunksRaw(ctx, chunks, cfg)
+	results, err := f.classifyChunksRaw(ctx, chunks, cfg, threshold)
 	if err != nil {
 		return BlockResult{}, err
 	}
@@ -78,8 +79,7 @@ func (f *Firewall) classifyRaw(ctx context.Context, text string, cfg classifyCon
 	return best, nil
 }
 
-func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg classifyConfig) (BlockResult, error) {
-	threshold := f.effectiveThreshold(cfg.hook)
+func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg classifyConfig, threshold float64) (BlockResult, error) {
 	payload := singleRequestPayload{
 		Text:      text,
 		Threshold: threshold,
@@ -97,7 +97,7 @@ func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg class
 	return blockResultFromResponse(resp, threshold)
 }
 
-func (f *Firewall) classifyChunksRaw(ctx context.Context, chunks []string, cfg classifyConfig) ([]BlockResult, error) {
+func (f *Firewall) classifyChunksRaw(ctx context.Context, chunks []string, cfg classifyConfig, threshold float64) ([]BlockResult, error) {
 	workers := f.chunkConcurrency
 	if workers > len(chunks) {
 		workers = len(chunks)
@@ -114,7 +114,7 @@ func (f *Firewall) classifyChunksRaw(ctx context.Context, chunks []string, cfg c
 		go func() {
 			defer wg.Done()
 			for index := range jobs {
-				result, err := f.classifySingleRaw(ctx, chunks[index], cfg)
+				result, err := f.classifySingleRaw(ctx, chunks[index], cfg, threshold)
 				if err != nil {
 					mu.Lock()
 					if firstErr == nil {
@@ -184,10 +184,7 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 	if len(cfg.toolNames) != 0 && len(cfg.toolNames) != len(texts) {
 		return nil, fmt.Errorf("firewall: toolNames length %d does not match texts length %d", len(cfg.toolNames), len(texts))
 	}
-	threshold := f.batchThreshold(cfg)
-	if !validThreshold(threshold) {
-		return nil, fmt.Errorf("firewall: batch threshold must be between 0 and 1, got %v", threshold)
-	}
+	threshold := adaptiveThreshold(len(texts))
 	payload := batchRequestPayload{
 		Texts:     texts,
 		Threshold: threshold,
@@ -276,22 +273,6 @@ func batchToolNameAt(cfg batchClassifyConfig, index int) string {
 		return ""
 	}
 	return cfg.toolNames[index]
-}
-
-func (f *Firewall) batchThreshold(cfg batchClassifyConfig) float64 {
-	if cfg.threshold != nil {
-		return *cfg.threshold
-	}
-	if len(cfg.hooks) == 0 {
-		return f.threshold
-	}
-	first := cfg.hooks[0]
-	for _, hook := range cfg.hooks[1:] {
-		if hook != first {
-			return f.threshold
-		}
-	}
-	return f.effectiveThreshold(first)
 }
 
 func repeatHooks(hook HookLabel, n int) []HookLabel {

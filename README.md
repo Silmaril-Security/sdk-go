@@ -18,8 +18,8 @@ This SDK provides the low-level Go interface for that workflow:
 - Classify user input, tool calls, tool responses, model output, or system
   prompt content.
 - Preserve hook and tool-name context for more accurate decisions.
-- Enforce configurable default and per-hook thresholds, with shadow mode for
-  observation-only rollout.
+- Enforce automatic adaptive thresholds, with shadow mode for observation-only
+  rollout.
 - Chunk long inputs consistently before they reach the API.
 - Retry transient API Gateway and model-serving failures.
 
@@ -34,7 +34,7 @@ go get github.com/Silmaril-Security/sdk-go/firewall@latest
 For reproducible installs, pin a tagged release:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.1.7
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.2.0
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -117,39 +117,39 @@ func main() {
 
 ```go
 type Options struct {
-    APIKey         string                 // required
-    APIURL         string                 // required
-    Threshold      *float64               // nil default: DefaultThreshold; pointer to 0 blocks everything
-    Timeout        time.Duration          // default: 10s for the default HTTP client
+    APIKey           string               // required
+    APIURL           string               // required
+    Timeout          time.Duration        // default: 10s for the default HTTP client
     ChunkConcurrency int                  // default: 8; long-input classify chunk fanout limit
-    HookThresholds map[HookLabel]float64  // default: empty
-    HTTPClient     *http.Client           // default: &http.Client{Timeout: Timeout}
-    ShadowMode     bool                   // default: false; classify calls observe without blocking when true
-    OnClassify     func(ClassifyEvent)    // optional telemetry callback for classification decisions
+    HTTPClient       *http.Client         // default: &http.Client{Timeout: Timeout}
+    ShadowMode       bool                 // default: false; classify calls observe without blocking when true
+    OnClassify       func(ClassifyEvent)  // optional telemetry callback for classification decisions
 }
 ```
 
-`Classify` sends the effective threshold for the supplied hook to the API and
+`Classify` sends an internally computed threshold to the API and
 returns the server's prediction, score, and applied threshold. By default,
 `Classify` and `ClassifyBatch` return a typed blocking error when
 `score >= threshold`.
-
-To set a threshold, pass a pointer:
-
-```go
-threshold := 0.0
-fw, err := firewall.New(firewall.Options{
-    APIKey:    apiKey,
-    APIURL:    apiURL,
-    Threshold: &threshold,
-})
-```
 
 When `HTTPClient` is provided, the SDK clones it without mutating your original
 client. Its timeout is preserved unless `Options.Timeout` is explicitly
 non-zero. If the clone has no `CheckRedirect` policy, the SDK installs a
 no-redirect policy; explicit caller-provided redirect policies are preserved and
 can forward custom headers.
+
+## Automatic Thresholding
+
+Customers do not tune score thresholds. Short inputs use the base threshold
+`0.5`, which corresponds to the SDK's default single-chunk operating point.
+When a call creates more scoring opportunities, the SDK raises the internal
+threshold before sending requests to `/classify`: 2 chunks use about `0.6661`,
+5 chunks use about `0.8328`, and 10 or more opportunities are capped at `0.9`.
+
+For `Classify`, the scoring-opportunity count is the number of generated
+chunks. For `ClassifyBatch`, it is the number of texts in the batch. The
+applied value remains available on `BlockResult.Threshold` and blocking error
+types as diagnostic metadata.
 
 ## Shadow Mode
 
@@ -211,8 +211,6 @@ firewall.HookLLMOutput     // "llm_output"
 firewall.HookUnknown       // "unknown"
 ```
 
-`firewall.DefaultHookThresholds()` returns a fresh copy of the default score threshold map.
-
 `firewall.PrependHook` and `firewall.PrependToolName` are legacy helpers for
 manual text-prefix integrations. `Classify` and `ClassifyBatch` send hook and
 tool metadata as structured JSON fields, so normal callers should use
@@ -263,9 +261,14 @@ if err != nil {
 log.Printf("classified %d items", len(results))
 ```
 
-Batch requests carry one threshold. If all batch hooks are the same, the SDK
-uses that hook's effective threshold; mixed-hook batches use the client default
-threshold unless `WithBatchThreshold` is supplied.
+Batch requests carry one internal threshold based on batch size.
+
+## Migration Notes
+
+Version `0.2.0` removes customer-facing `Options.Threshold`,
+`Options.HookThresholds`, and `WithBatchThreshold`. Existing enforcement,
+shadow mode, hook metadata, result threshold diagnostics, and typed blocking
+errors remain available.
 
 ## Retries
 

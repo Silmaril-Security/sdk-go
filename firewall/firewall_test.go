@@ -16,8 +16,6 @@ import (
 	"time"
 )
 
-func float64Ptr(v float64) *float64 { return &v }
-
 func noJitter(delay time.Duration) time.Duration { return delay }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -57,9 +55,6 @@ func TestNewDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if fw.threshold != DefaultThreshold {
-		t.Errorf("threshold = %v, want %v", fw.threshold, DefaultThreshold)
-	}
 	if fw.httpClient.Timeout != defaultTimeout {
 		t.Errorf("timeout = %v, want %v", fw.httpClient.Timeout, defaultTimeout)
 	}
@@ -96,20 +91,6 @@ func TestNewRejectsNegativeChunkConcurrency(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "ChunkConcurrency must be non-negative") {
 		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestNewHonorsExplicitZeroThreshold(t *testing.T) {
-	fw, err := New(Options{
-		APIKey:    "sk",
-		APIURL:    "https://example.com",
-		Threshold: float64Ptr(0),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fw.threshold != 0 {
-		t.Errorf("threshold = %v, want 0", fw.threshold)
 	}
 }
 
@@ -219,14 +200,14 @@ func TestClassifySingleHappyPath(t *testing.T) {
 	if res.Prediction != PredictionMalicious || res.Score != 0.95 {
 		t.Errorf("result = %+v", res)
 	}
-	if res.Threshold != DefaultThreshold {
-		t.Errorf("result threshold = %v, want %v", res.Threshold, DefaultThreshold)
+	if res.Threshold != baseThreshold {
+		t.Errorf("result threshold = %v, want %v", res.Threshold, baseThreshold)
 	}
 	if gotPayload.Text != "hello" || gotPayload.Hook != HookUserInput || gotPayload.ToolName != "cal" {
 		t.Errorf("payload = %+v", gotPayload)
 	}
-	if gotPayload.Threshold != DefaultThreshold {
-		t.Errorf("threshold = %v, want %v", gotPayload.Threshold, DefaultThreshold)
+	if gotPayload.Threshold != baseThreshold {
+		t.Errorf("threshold = %v, want %v", gotPayload.Threshold, baseThreshold)
 	}
 }
 
@@ -327,14 +308,43 @@ func TestClassifyBatchHappyPath(t *testing.T) {
 	if results[0].Prediction != PredictionBenign || results[1].Prediction != PredictionMalicious {
 		t.Errorf("results = %+v", results)
 	}
-	if gotPayload.Threshold != DefaultThreshold {
-		t.Errorf("threshold = %v, want %v", gotPayload.Threshold, DefaultThreshold)
+	if gotPayload.Threshold != adaptiveThreshold(2) {
+		t.Errorf("threshold = %v, want %v", gotPayload.Threshold, adaptiveThreshold(2))
 	}
 	if len(gotPayload.Hooks) != 2 || gotPayload.Hooks[0] != HookUserInput || gotPayload.Hooks[1] != HookUserInput {
 		t.Errorf("hooks = %v", gotPayload.Hooks)
 	}
 	if len(gotPayload.ToolNames) != 2 || gotPayload.ToolNames[0] == nil || *gotPayload.ToolNames[0] != "read_file" || gotPayload.ToolNames[1] != nil {
 		t.Errorf("tool_names = %v", gotPayload.ToolNames)
+	}
+}
+
+func TestClassifyBatchAdaptiveThresholdScheduleOnWire(t *testing.T) {
+	var received []batchRequestPayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload batchRequestPayload
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		received = append(received, payload)
+		predictions := make([]singleResponse, len(payload.Texts))
+		for i := range predictions {
+			predictions[i] = singleResponse{Prediction: PredictionBenign, Score: 0}
+		}
+		_ = json.NewEncoder(w).Encode(batchResponse{Predictions: predictions})
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	if _, err := fw.ClassifyBatch(context.Background(), []string{"a", "b", "c", "d", "e"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.ClassifyBatch(context.Background(), []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := received[0].Threshold, adaptiveThreshold(5); got != want {
+		t.Errorf("5-item batch threshold = %v, want %v", got, want)
+	}
+	if got := received[1].Threshold; got != maxAdaptiveThreshold {
+		t.Errorf("10-item batch threshold = %v, want %v", got, maxAdaptiveThreshold)
 	}
 }
 
@@ -410,82 +420,19 @@ func TestClassifyBatchMismatchedHooks(t *testing.T) {
 	}
 }
 
-func TestClassifyAppliesConfiguredThreshold(t *testing.T) {
-	var gotPayload singleRequestPayload
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionMalicious, Score: 0.6})
-	}))
-	defer ts.Close()
-
-	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, Threshold: float64Ptr(0.7)})
-	result, err := fw.Classify(context.Background(), "borderline", WithHook(HookUserInput))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotPayload.Threshold != 0.7 {
-		t.Errorf("threshold = %v, want 0.7", gotPayload.Threshold)
-	}
-	if result.Prediction != PredictionMalicious {
-		t.Errorf("prediction = %q, want MALICIOUS", result.Prediction)
-	}
-	if result.Threshold != 0.7 {
-		t.Errorf("result threshold = %v, want 0.7", result.Threshold)
-	}
-}
-
-func TestClassifyUsesHookThreshold(t *testing.T) {
-	var gotPayload singleRequestPayload
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionMalicious, Score: 0.7})
-	}))
-	defer ts.Close()
-
-	fw, _ := New(Options{
-		APIKey:         "sk",
-		APIURL:         ts.URL,
-		Threshold:      float64Ptr(0.3),
-		HookThresholds: map[HookLabel]float64{HookToolResponse: 0.8},
-	})
-	result, err := fw.Classify(context.Background(), "tool output", WithHook(HookToolResponse))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if gotPayload.Threshold != 0.8 {
-		t.Errorf("threshold = %v, want 0.8", gotPayload.Threshold)
-	}
-	if result.Prediction != PredictionMalicious {
-		t.Errorf("prediction = %q, want MALICIOUS", result.Prediction)
-	}
-}
-
 func TestClassifyTrustsServerPrediction(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.99})
 	}))
 	defer ts.Close()
 
-	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, Threshold: float64Ptr(0.5), ShadowMode: true})
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
 	result, err := fw.Classify(context.Background(), "server-side benign")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.Prediction != PredictionBenign {
 		t.Errorf("prediction = %q, want BENIGN", result.Prediction)
-	}
-}
-
-func TestNewRejectsInvalidThresholds(t *testing.T) {
-	if _, err := New(Options{APIKey: "sk", APIURL: "https://example.com", Threshold: float64Ptr(1.1)}); err == nil {
-		t.Fatal("expected invalid threshold error")
-	}
-	if _, err := New(Options{
-		APIKey:         "sk",
-		APIURL:         "https://example.com",
-		HookThresholds: map[HookLabel]float64{HookUserInput: -0.1},
-	}); err == nil {
-		t.Fatal("expected invalid hook threshold error")
 	}
 }
 
@@ -888,9 +835,10 @@ func TestClassifyChunksLongInputAndPicksMaxScore(t *testing.T) {
 	if len(received) < 2 {
 		t.Errorf("expected multiple chunk requests, got %d", len(received))
 	}
+	wantThreshold := adaptiveThreshold(len(received))
 	for _, payload := range received {
-		if payload.Threshold != DefaultThreshold {
-			t.Errorf("threshold = %v, want %v", payload.Threshold, DefaultThreshold)
+		if payload.Threshold != wantThreshold {
+			t.Errorf("threshold = %v, want %v", payload.Threshold, wantThreshold)
 		}
 		if payload.Hook != HookUserInput {
 			t.Errorf("hook = %q, want %q", payload.Hook, HookUserInput)
@@ -933,6 +881,7 @@ func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
 	if len(received) < 2 {
 		t.Fatalf("expected multiple chunk requests, got %d", len(received))
 	}
+	wantThreshold := adaptiveThreshold(len(received))
 	for i, payload := range received {
 		if payload.Hook != HookToolResponse {
 			t.Errorf("hook[%d] = %q, want %q", i, payload.Hook, HookToolResponse)
@@ -940,8 +889,8 @@ func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
 		if payload.ToolName != "fetch_webpage" {
 			t.Errorf("tool_name[%d] = %q, want fetch_webpage", i, payload.ToolName)
 		}
-		if payload.Threshold != DefaultThreshold {
-			t.Errorf("threshold[%d] = %v, want %v", i, payload.Threshold, DefaultThreshold)
+		if payload.Threshold != wantThreshold {
+			t.Errorf("threshold[%d] = %v, want %v", i, payload.Threshold, wantThreshold)
 		}
 	}
 }
@@ -1001,25 +950,5 @@ func TestClassifyChunkConcurrencyLimit(t *testing.T) {
 	}
 	if maxActive.Load() > 2 {
 		t.Fatalf("max active requests = %d, want <= 2", maxActive.Load())
-	}
-}
-
-func TestHookThresholdsCopy(t *testing.T) {
-	custom := map[HookLabel]float64{HookUserInput: 0.3}
-	var gotPayload singleRequestPayload
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
-	}))
-	defer ts.Close()
-
-	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, HookThresholds: custom})
-	custom[HookUserInput] = 0.42
-
-	if _, err := fw.Classify(context.Background(), "hello", WithHook(HookUserInput)); err != nil {
-		t.Fatal(err)
-	}
-	if gotPayload.Threshold != 0.3 {
-		t.Errorf("threshold = %v, want 0.3", gotPayload.Threshold)
 	}
 }

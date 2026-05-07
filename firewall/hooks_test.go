@@ -50,34 +50,3 @@ func TestPrependToolNameEmpty(t *testing.T) {
 		t.Errorf("empty tool name: got %q, want unchanged", got)
 	}
 }
-
-func TestDefaultHookThresholds(t *testing.T) {
-	labels := []HookLabel{
-		HookUserInput, HookSystemPrompt, HookToolCall,
-		HookToolResponse, HookLLMOutput, HookUnknown,
-	}
-	thresholds := DefaultHookThresholds()
-	for _, label := range labels {
-		v, ok := thresholds[label]
-		if !ok {
-			t.Errorf("DefaultHookThresholds missing %q", label)
-			continue
-		}
-		if v != 0.5 {
-			t.Errorf("DefaultHookThresholds[%q] = %v, want 0.5", label, v)
-		}
-	}
-	if len(thresholds) != len(labels) {
-		t.Errorf("DefaultHookThresholds size = %d, want %d", len(thresholds), len(labels))
-	}
-	thresholds[HookUserInput] = 0.99
-	if DefaultHookThresholds()[HookUserInput] != 0.5 {
-		t.Error("DefaultHookThresholds should return a copy")
-	}
-}
-
-func TestDefaultThresholdValue(t *testing.T) {
-	if DefaultThreshold != 0.5 {
-		t.Errorf("DefaultThreshold = %v, want 0.5", DefaultThreshold)
-	}
-}

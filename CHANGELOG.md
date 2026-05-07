@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.2.0
+
+- Removes customer-facing threshold configuration from `Options` and batch
+  calls.
+- Adds internal adaptive thresholds based on chunk or batch size, capped at
+  `0.9`, while preserving `BlockResult.Threshold` diagnostics.
+- Updates README guidance for automatic thresholding and migration from removed
+  threshold knobs.
+
 ## v0.1.7
 
 - Honors explicit zero thresholds by making `Options.Threshold` optional.
