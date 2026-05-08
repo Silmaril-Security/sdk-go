@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.3.1
+
+- Raises the SDK long-input cap to 81,920 estimated tokens while preserving
+  400-token chunk windows and 64-token overlap.
+
 ## v0.3.0
 
 - Removes customer-facing threshold configuration from `Options` and batch

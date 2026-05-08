@@ -10,8 +10,8 @@ import (
 )
 
 func TestChunkingConstantsMatchTypeScriptSDK(t *testing.T) {
-	if MaxInputTokens != 10_240 {
-		t.Errorf("MaxInputTokens = %d, want 10240", MaxInputTokens)
+	if MaxInputTokens != 81_920 {
+		t.Errorf("MaxInputTokens = %d, want 81920", MaxInputTokens)
 	}
 	if ChunkWindow != 400 {
 		t.Errorf("ChunkWindow = %d, want 400", ChunkWindow)
@@ -21,6 +21,9 @@ func TestChunkingConstantsMatchTypeScriptSDK(t *testing.T) {
 	}
 	if MaxInputChars != MaxInputTokens*CharsPerToken {
 		t.Errorf("MaxInputChars = %d, want %d", MaxInputChars, MaxInputTokens*CharsPerToken)
+	}
+	if MaxInputChars != 327_680 {
+		t.Errorf("MaxInputChars = %d, want 327680", MaxInputChars)
 	}
 	if ChunkWindowChars != ChunkWindow*CharsPerToken {
 		t.Errorf("ChunkWindowChars = %d, want %d", ChunkWindowChars, ChunkWindow*CharsPerToken)

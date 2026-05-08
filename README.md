@@ -34,7 +34,7 @@ go get github.com/Silmaril-Security/sdk-go/firewall@latest
 For reproducible installs, pin a tagged release:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.3.0
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.3.1
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -227,7 +227,7 @@ All error types satisfy `error` and work with `errors.As`.
 ## Chunking
 
 Long inputs are chunked client-side into 400-token overlapping windows
-(64-token overlap). The maximum input is 10,240 tokens. For `Classify`, chunks
+(64-token overlap). The maximum input is 81,920 tokens. For `Classify`, chunks
 are sent as bounded parallel single-text requests using `Options.ChunkConcurrency`
 (default: 8), letting API Gateway and SageMaker distribute work across serving
 instances. The highest score is returned.

@@ -12,7 +12,7 @@ import (
 // clients split long inputs identically.
 const (
 	CharsPerToken     = 4
-	MaxInputTokens    = 10_240
+	MaxInputTokens    = 81_920
 	ChunkWindow       = 400
 	ChunkOverlap      = 64
 	MaxInputChars     = MaxInputTokens * CharsPerToken
