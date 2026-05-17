@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -280,6 +281,35 @@ func TestClassifyNoOptionsOmitsHookAndToolName(t *testing.T) {
 	}
 }
 
+func TestClassifySerializesMetadata(t *testing.T) {
+	var gotPayload singleRequestPayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	metadata := ClassificationMetadata{
+		"langgraph": map[string]any{
+			"thread_id":  "thread-123",
+			"run_id":     "run-123",
+			"message_id": "msg-123",
+		},
+	}
+	if _, err := fw.Classify(context.Background(), "hi", WithHook(HookUserInput), WithMetadata(metadata)); err != nil {
+		t.Fatal(err)
+	}
+	if gotPayload.Metadata == nil {
+		t.Fatal("metadata was not serialized")
+	}
+	if !reflect.DeepEqual(*gotPayload.Metadata, metadata) {
+		t.Fatalf("metadata = %#v, want %#v", *gotPayload.Metadata, metadata)
+	}
+}
+
 func TestClassifyBatchHappyPath(t *testing.T) {
 	var gotPayload batchRequestPayload
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -316,6 +346,43 @@ func TestClassifyBatchHappyPath(t *testing.T) {
 	}
 	if len(gotPayload.ToolNames) != 2 || gotPayload.ToolNames[0] == nil || *gotPayload.ToolNames[0] != "read_file" || gotPayload.ToolNames[1] != nil {
 		t.Errorf("tool_names = %v", gotPayload.ToolNames)
+	}
+}
+
+func TestClassifyBatchSerializesMetadata(t *testing.T) {
+	var gotPayload batchRequestPayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(batchResponse{
+			Predictions: []singleResponse{
+				{Prediction: PredictionBenign, Score: 0.1},
+				{Prediction: PredictionBenign, Score: 0.2},
+			},
+		})
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
+	metadata := []ClassificationMetadata{
+		{"langgraph": map[string]any{"run_id": "run-a"}},
+		nil,
+	}
+	if _, err := fw.ClassifyBatch(context.Background(), []string{"a", "b"}, WithBatchMetadata(metadata)); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotPayload.Metadata) != 2 {
+		t.Fatalf("metadata length = %d, want 2", len(gotPayload.Metadata))
+	}
+	if gotPayload.Metadata[0] == nil {
+		t.Fatal("metadata[0] was not serialized")
+	}
+	if !reflect.DeepEqual(*gotPayload.Metadata[0], metadata[0]) {
+		t.Fatalf("metadata[0] = %#v, want %#v", *gotPayload.Metadata[0], metadata[0])
+	}
+	if gotPayload.Metadata[1] != nil {
+		t.Fatalf("metadata[1] = %#v, want nil", *gotPayload.Metadata[1])
 	}
 }
 
@@ -417,6 +484,12 @@ func TestClassifyBatchMismatchedHooks(t *testing.T) {
 	)
 	if err == nil {
 		t.Error("expected mismatch error")
+	}
+	_, err = fw.ClassifyBatch(context.Background(), []string{"a", "b"},
+		WithBatchMetadata([]ClassificationMetadata{{"run_id": "run-a"}}),
+	)
+	if err == nil {
+		t.Error("expected metadata mismatch error")
 	}
 }
 
@@ -874,6 +947,7 @@ func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
 		long,
 		WithHook(HookToolResponse),
 		WithToolName("fetch_webpage"),
+		WithMetadata(ClassificationMetadata{"langgraph": map[string]any{"run_id": "run-chunked"}}),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -891,6 +965,12 @@ func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
 		}
 		if payload.Threshold != wantThreshold {
 			t.Errorf("threshold[%d] = %v, want %v", i, payload.Threshold, wantThreshold)
+		}
+		if payload.Metadata == nil {
+			t.Fatalf("metadata[%d] was not serialized", i)
+		}
+		if got := (*payload.Metadata)["langgraph"].(map[string]any)["run_id"]; got != "run-chunked" {
+			t.Errorf("metadata[%d] run_id = %v, want run-chunked", i, got)
 		}
 	}
 }

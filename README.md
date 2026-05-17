@@ -34,7 +34,7 @@ go get github.com/Silmaril-Security/sdk-go/firewall@latest
 For reproducible installs, pin a tagged release:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.3.1
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.3.2
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -92,6 +92,13 @@ func main() {
     userResult, err := fw.Classify(ctx,
         "What is the capital of France?",
         firewall.WithHook(firewall.HookUserInput),
+        firewall.WithMetadata(firewall.ClassificationMetadata{
+            "langgraph": map[string]any{
+                "thread_id":  "thread-123",
+                "run_id":     "run-123",
+                "message_id": "msg-123",
+            },
+        }),
     )
     if err != nil {
         log.Fatal(err)
@@ -216,6 +223,41 @@ manual text-prefix integrations. `Classify` and `ClassifyBatch` send hook and
 tool metadata as structured JSON fields, so normal callers should use
 `WithHook`, `WithToolName`, `WithBatchHooks`, and `WithBatchToolNames`.
 
+## Request Metadata
+
+Use `WithMetadata` to forward application or integration identifiers to the
+classification API without embedding them in the classified text:
+
+```go
+_, err := fw.Classify(ctx, text,
+    firewall.WithHook(firewall.HookUserInput),
+    firewall.WithMetadata(firewall.ClassificationMetadata{
+        "langgraph": map[string]any{
+            "thread_id":  "customer-thread-123",
+            "run_id":     "langgraph-run-456",
+            "message_id": "message-789",
+        },
+    }),
+)
+```
+
+Batch calls accept one metadata object per text. The metadata slice must match
+the number of texts; use `nil` for entries without metadata:
+
+```go
+_, err := fw.ClassifyBatch(ctx,
+    []string{text1, text2},
+    firewall.WithBatchHooks([]firewall.HookLabel{
+        firewall.HookUserInput,
+        firewall.HookToolResponse,
+    }),
+    firewall.WithBatchMetadata([]firewall.ClassificationMetadata{
+        {"langgraph": map[string]any{"run_id": "run-a"}},
+        nil,
+    }),
+)
+```
+
 ## Errors
 
 - `*firewall.APIError`: returned when the firewall API responds with a non-2xx or redirect status. Carries `Status`, `StatusText`, and a 64 KiB-capped `Body`; the default error string omits the body to keep logs clean.
@@ -261,7 +303,8 @@ if err != nil {
 log.Printf("classified %d items", len(results))
 ```
 
-Batch requests carry one internal threshold based on batch size.
+Batch requests carry one internal threshold based on batch size. Hook, tool-name,
+and metadata slices must match the number of texts.
 
 ## Migration Notes
 

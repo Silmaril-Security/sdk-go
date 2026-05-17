@@ -26,6 +26,10 @@ type BlockResult struct {
 	DetectorCounts map[string]int     `json:"detector_counts,omitempty"`
 }
 
+// ClassificationMetadata carries caller-provided request metadata alongside
+// the classified text without embedding it in the text itself.
+type ClassificationMetadata map[string]any
+
 // Options configures a Firewall client. APIKey and APIURL are required.
 // Timeout defaults to 10 seconds for the default HTTP client. When HTTPClient
 // is set, Timeout is applied only when explicitly non-zero, by cloning the
@@ -46,6 +50,7 @@ type Options struct {
 type classifyConfig struct {
 	hook       HookLabel
 	toolName   string
+	metadata   *ClassificationMetadata
 	shadowMode *bool
 }
 
@@ -62,6 +67,11 @@ func WithToolName(name string) ClassifyOption {
 	return func(c *classifyConfig) { c.toolName = name }
 }
 
+// WithMetadata attaches caller-provided metadata to a single Classify request.
+func WithMetadata(metadata ClassificationMetadata) ClassifyOption {
+	return func(c *classifyConfig) { c.metadata = &metadata }
+}
+
 // WithShadowMode overrides the client-level shadow-mode setting for a single
 // Classify call.
 func WithShadowMode(enabled bool) ClassifyOption {
@@ -69,9 +79,11 @@ func WithShadowMode(enabled bool) ClassifyOption {
 }
 
 type batchClassifyConfig struct {
-	hooks      []HookLabel
-	toolNames  []string
-	shadowMode *bool
+	hooks       []HookLabel
+	toolNames   []string
+	metadata    []ClassificationMetadata
+	metadataSet bool
+	shadowMode  *bool
 }
 
 // BatchClassifyOption customizes a single ClassifyBatch call.
@@ -86,6 +98,15 @@ func WithBatchHooks(hooks []HookLabel) BatchClassifyOption {
 // An empty string at index i omits the tool_name for that text.
 func WithBatchToolNames(names []string) BatchClassifyOption {
 	return func(c *batchClassifyConfig) { c.toolNames = names }
+}
+
+// WithBatchMetadata sets one metadata object per text. Length must match texts.
+// A nil metadata entry is serialized as null for that text.
+func WithBatchMetadata(metadata []ClassificationMetadata) BatchClassifyOption {
+	return func(c *batchClassifyConfig) {
+		c.metadata = metadata
+		c.metadataSet = true
+	}
 }
 
 // WithBatchShadowMode overrides the client-level shadow-mode setting for a

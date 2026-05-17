@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.3.2
+
+- Adds request metadata support to `Classify` and `ClassifyBatch`, including
+  chunk fanout propagation.
+
 ## v0.3.1
 
 - Raises the SDK long-input cap to 81,920 estimated tokens while preserving

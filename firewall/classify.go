@@ -10,17 +10,19 @@ import (
 )
 
 type singleRequestPayload struct {
-	Text      string    `json:"text"`
-	Hook      HookLabel `json:"hook,omitempty"`
-	ToolName  string    `json:"tool_name,omitempty"`
-	Threshold float64   `json:"threshold"`
+	Text      string                  `json:"text"`
+	Hook      HookLabel               `json:"hook,omitempty"`
+	ToolName  string                  `json:"tool_name,omitempty"`
+	Metadata  *ClassificationMetadata `json:"metadata,omitempty"`
+	Threshold float64                 `json:"threshold"`
 }
 
 type batchRequestPayload struct {
-	Texts     []string    `json:"texts"`
-	Hooks     []HookLabel `json:"hooks,omitempty"`
-	ToolNames []*string   `json:"tool_names,omitempty"`
-	Threshold float64     `json:"threshold"`
+	Texts     []string                  `json:"texts"`
+	Hooks     []HookLabel               `json:"hooks,omitempty"`
+	ToolNames []*string                 `json:"tool_names,omitempty"`
+	Metadata  []*ClassificationMetadata `json:"metadata,omitempty"`
+	Threshold float64                   `json:"threshold"`
 }
 
 type singleResponse struct {
@@ -89,6 +91,9 @@ func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg class
 	}
 	if cfg.toolName != "" {
 		payload.ToolName = cfg.toolName
+	}
+	if cfg.metadata != nil {
+		payload.Metadata = cfg.metadata
 	}
 	var resp singleResponse
 	if err := f.postJSON(ctx, payload, &resp); err != nil {
@@ -184,6 +189,9 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 	if len(cfg.toolNames) != 0 && len(cfg.toolNames) != len(texts) {
 		return nil, fmt.Errorf("firewall: toolNames length %d does not match texts length %d", len(cfg.toolNames), len(texts))
 	}
+	if cfg.metadataSet && len(cfg.metadata) != len(texts) {
+		return nil, fmt.Errorf("firewall: metadata length %d does not match texts length %d", len(cfg.metadata), len(texts))
+	}
 	threshold := adaptiveThreshold(len(texts))
 	payload := batchRequestPayload{
 		Texts:     texts,
@@ -194,6 +202,9 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 	}
 	if len(cfg.toolNames) > 0 {
 		payload.ToolNames = batchToolNames(cfg.toolNames)
+	}
+	if cfg.metadataSet {
+		payload.Metadata = batchMetadata(cfg.metadata)
 	}
 	var resp batchResponse
 	if err := f.postJSON(ctx, payload, &resp); err != nil {
@@ -299,6 +310,18 @@ func batchToolNames(names []string) []*string {
 		}
 		name := name
 		out[i] = &name
+	}
+	return out
+}
+
+func batchMetadata(metadata []ClassificationMetadata) []*ClassificationMetadata {
+	out := make([]*ClassificationMetadata, len(metadata))
+	for i, item := range metadata {
+		if item == nil {
+			continue
+		}
+		item := item
+		out[i] = &item
 	}
 	return out
 }
