@@ -52,6 +52,7 @@ type classifyConfig struct {
 	toolName   string
 	metadata   *ClassificationMetadata
 	shadowMode *bool
+	requestID  string
 }
 
 // ClassifyOption customizes a single Classify call.
@@ -78,12 +79,18 @@ func WithShadowMode(enabled bool) ClassifyOption {
 	return func(c *classifyConfig) { c.shadowMode = &enabled }
 }
 
+// WithRequestID overrides the generated request id in metadata.silmaril.
+func WithRequestID(id string) ClassifyOption {
+	return func(c *classifyConfig) { c.requestID = id }
+}
+
 type batchClassifyConfig struct {
 	hooks       []HookLabel
 	toolNames   []string
 	metadata    []ClassificationMetadata
 	metadataSet bool
 	shadowMode  *bool
+	requestID   string
 }
 
 // BatchClassifyOption customizes a single ClassifyBatch call.
@@ -113,6 +120,11 @@ func WithBatchMetadata(metadata []ClassificationMetadata) BatchClassifyOption {
 // single ClassifyBatch call.
 func WithBatchShadowMode(enabled bool) BatchClassifyOption {
 	return func(c *batchClassifyConfig) { c.shadowMode = &enabled }
+}
+
+// WithBatchRequestID overrides the generated request id in metadata.silmaril.
+func WithBatchRequestID(id string) BatchClassifyOption {
+	return func(c *batchClassifyConfig) { c.requestID = id }
 }
 
 // ClassifyEvent describes a classification decision. It is emitted for both

@@ -18,9 +18,10 @@ This SDK provides the low-level Go interface for that workflow:
 - Classify user input, tool calls, tool responses, model output, or system
   prompt content.
 - Preserve hook and tool-name context for more accurate decisions.
-- Enforce automatic adaptive thresholds, with shadow mode for observation-only
-  rollout.
+- Enforce backend-owned adaptive thresholds, with shadow mode for
+  observation-only rollout.
 - Chunk long inputs consistently before they reach the API.
+- Send SDK metadata that lets the Firewall reconstruct chunked payloads.
 - Retry transient API Gateway and model-serving failures.
 
 ## Install
@@ -34,7 +35,7 @@ go get github.com/Silmaril-Security/sdk-go/firewall@latest
 For reproducible installs, pin a tagged release:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.3.2
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.4.0
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -110,7 +111,7 @@ func main() {
         firewall.WithHook(firewall.HookUserInput),
     )
     if err != nil {
-        var blocked *firewall.PromptBlockedError
+        var blocked *firewall.FirewallBlockedError
         if errors.As(err, &blocked) {
             fmt.Printf("blocked: score=%.4f threshold=%.4f\n", blocked.Score, blocked.Threshold)
             return
@@ -134,10 +135,9 @@ type Options struct {
 }
 ```
 
-`Classify` sends an internally computed threshold to the API and
-returns the server's prediction, score, and applied threshold. By default,
-`Classify` and `ClassifyBatch` return a typed blocking error when
-`score >= threshold`.
+`Classify` returns the server's prediction, score, and backend-applied
+threshold. By default, `Classify` and `ClassifyBatch` return a typed blocking
+error when the backend returns a malicious verdict at the applied threshold.
 
 When `HTTPClient` is provided, the SDK clones it without mutating your original
 client. Its timeout is preserved unless `Options.Timeout` is explicitly
@@ -145,24 +145,25 @@ non-zero. If the clone has no `CheckRedirect` policy, the SDK installs a
 no-redirect policy; explicit caller-provided redirect policies are preserved and
 can forward custom headers.
 
-## Automatic Thresholding
+## Backend Thresholding
 
-Customers do not tune score thresholds. Short inputs use the base threshold
-`0.5`, which corresponds to the SDK's default single-chunk operating point.
-When a call creates more scoring opportunities, the SDK raises the internal
-threshold before sending requests to `/classify`: 2 chunks use about `0.6661`,
-5 chunks use about `0.8328`, and 10 or more opportunities are capped at `0.9`.
+Customers do not tune score thresholds in the SDK. Tenant Firewall config owns
+the adaptive threshold schedule. The default backend config is
+`base_threshold=0.5`, `target_sequence_fpr=0.01`, and
+`max_adaptive_threshold=0.9`, which keeps the current schedule: 1 scoring
+opportunity uses `0.5`, 2 use about `0.6661`, 5 use about `0.8328`, and 10 or
+more are capped at `0.9`.
 
-For `Classify`, the scoring-opportunity count is the number of generated
-chunks. For `ClassifyBatch`, it is the number of texts in the batch. The
-applied value remains available on `BlockResult.Threshold` and blocking error
-types as diagnostic metadata.
+The SDK no longer sends `threshold` in request payloads. It sends chunk
+metadata instead, and the backend combines tenant config, active batch size,
+and chunk count to decide the threshold. The applied value remains available on
+`BlockResult.Threshold` and blocking error types as diagnostic metadata.
 
 ## Shadow Mode
 
 `Classify` and `ClassifyBatch` enforce thresholds by default. Shadow mode keeps
 the same classification and threshold logic but suppresses
-`PromptBlockedError` and `BatchPromptBlockedError`, so live traffic can continue
+`FirewallBlockedError` and `BatchFirewallBlockedError`, so live traffic can continue
 while telemetry records what would have blocked:
 
 ```go
@@ -241,6 +242,15 @@ _, err := fw.Classify(ctx, text,
 )
 ```
 
+The SDK preserves caller metadata and adds a reserved `metadata.silmaril`
+namespace to every request. SDK-controlled fields are `sdk_language`,
+`sdk_version`, `request_id`, `input_index`, `chunk_index`, and `chunk_count`.
+Single unchunked requests use `input_index=0`, `chunk_index=0`, and
+`chunk_count=1`; batches use one metadata object per input; chunked requests
+reuse a single request id across all chunks. If callers provide
+`metadata["silmaril"]`, it must be an object and SDK-reserved keys are
+overwritten by the SDK.
+
 Batch calls accept one metadata object per text. The metadata slice must match
 the number of texts; use `nil` for entries without metadata:
 
@@ -261,8 +271,11 @@ _, err := fw.ClassifyBatch(ctx,
 ## Errors
 
 - `*firewall.APIError`: returned when the firewall API responds with a non-2xx or redirect status. Carries `Status`, `StatusText`, and a 64 KiB-capped `Body`; the default error string omits the body to keep logs clean.
-- `*firewall.PromptBlockedError`: returned by `Classify` in enforcement mode when the score meets or exceeds the effective threshold. Carries `Score`, `Threshold`, `PromptText`, `Hook`, `ToolName`, and `Result`.
-- `*firewall.BatchPromptBlockedError`: returned by `ClassifyBatch` in enforcement mode when one or more inputs meet or exceed the effective threshold. Carries all blocked items with index, text, hook, tool name, and result.
+- `*firewall.FirewallBlockedError`: returned by `Classify` in enforcement mode when the backend blocks the request. Carries `Score`, `Threshold`, `PromptText`, `Hook`, `ToolName`, and `Result`.
+- `*firewall.BatchFirewallBlockedError`: returned by `ClassifyBatch` in enforcement mode when one or more inputs are blocked. Carries all blocked items with index, text, hook, tool name, and result.
+
+`*firewall.PromptBlockedError` and `*firewall.BatchPromptBlockedError` remain
+as deprecated aliases for one release.
 
 All error types satisfy `error` and work with `errors.As`.
 
@@ -293,7 +306,7 @@ results, err := fw.ClassifyBatch(ctx,
     }),
 )
 if err != nil {
-    var blocked *firewall.BatchPromptBlockedError
+    var blocked *firewall.BatchFirewallBlockedError
     if errors.As(err, &blocked) {
         log.Printf("blocked %d batch items", len(blocked.Blocked))
     } else {
@@ -303,15 +316,16 @@ if err != nil {
 log.Printf("classified %d items", len(results))
 ```
 
-Batch requests carry one internal threshold based on batch size. Hook, tool-name,
-and metadata slices must match the number of texts.
+Batch requests carry one SDK metadata object per item so the backend can apply
+tenant-owned thresholding. Hook, tool-name, and metadata slices must match the
+number of texts.
 
 ## Migration Notes
 
-Version `0.3.0` removes customer-facing `Options.Threshold`,
-`Options.HookThresholds`, and `WithBatchThreshold`. Existing enforcement,
-shadow mode, hook metadata, result threshold diagnostics, and typed blocking
-errors remain available.
+Version `0.4.0` moves all threshold decisions to Firewall tenant/backend
+config, adds SDK reconstruction metadata, and renames blocking errors to
+`FirewallBlockedError` and `BatchFirewallBlockedError`. Deprecated
+`PromptBlockedError` aliases remain available for one release.
 
 ## Retries
 

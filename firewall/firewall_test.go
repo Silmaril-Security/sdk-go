@@ -25,6 +25,43 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
+func requireSilmarilMetadata(
+	t *testing.T,
+	metadata *ClassificationMetadata,
+	requestID string,
+	inputIndex int,
+	chunkIndex int,
+	chunkCount int,
+) map[string]any {
+	t.Helper()
+	if metadata == nil {
+		t.Fatal("metadata was not serialized")
+	}
+	raw, ok := (*metadata)["silmaril"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata.silmaril = %#v, want object", (*metadata)["silmaril"])
+	}
+	if raw["sdk_language"] != "go" {
+		t.Errorf("sdk_language = %v, want go", raw["sdk_language"])
+	}
+	if raw["sdk_version"] != SDKVersion {
+		t.Errorf("sdk_version = %v, want %s", raw["sdk_version"], SDKVersion)
+	}
+	if raw["request_id"] != requestID {
+		t.Errorf("request_id = %v, want %s", raw["request_id"], requestID)
+	}
+	if got := int(raw["input_index"].(float64)); got != inputIndex {
+		t.Errorf("input_index = %d, want %d", got, inputIndex)
+	}
+	if got := int(raw["chunk_index"].(float64)); got != chunkIndex {
+		t.Errorf("chunk_index = %d, want %d", got, chunkIndex)
+	}
+	if got := int(raw["chunk_count"].(float64)); got != chunkCount {
+		t.Errorf("chunk_count = %d, want %d", got, chunkCount)
+	}
+	return raw
+}
+
 type trackingBody struct {
 	reader *strings.Reader
 	closed bool
@@ -183,7 +220,7 @@ func TestClassifySingleHappyPath(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
 			t.Fatal(err)
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionMalicious, Score: 0.95})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionMalicious, Score: 0.95, Threshold: 0.5})
 	}))
 	defer ts.Close()
 
@@ -194,6 +231,7 @@ func TestClassifySingleHappyPath(t *testing.T) {
 	res, err := fw.Classify(context.Background(), "hello",
 		WithHook(HookUserInput),
 		WithToolName("cal"),
+		WithRequestID("req-single"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -201,22 +239,20 @@ func TestClassifySingleHappyPath(t *testing.T) {
 	if res.Prediction != PredictionMalicious || res.Score != 0.95 {
 		t.Errorf("result = %+v", res)
 	}
-	if res.Threshold != baseThreshold {
-		t.Errorf("result threshold = %v, want %v", res.Threshold, baseThreshold)
+	if res.Threshold != 0.5 {
+		t.Errorf("result threshold = %v, want 0.5", res.Threshold)
 	}
 	if gotPayload.Text != "hello" || gotPayload.Hook != HookUserInput || gotPayload.ToolName != "cal" {
 		t.Errorf("payload = %+v", gotPayload)
 	}
-	if gotPayload.Threshold != baseThreshold {
-		t.Errorf("threshold = %v, want %v", gotPayload.Threshold, baseThreshold)
-	}
+	requireSilmarilMetadata(t, gotPayload.Metadata, "req-single", 0, 0, 1)
 }
 
 func TestClassifySanitizesInvalidUTF8Payload(t *testing.T) {
 	var gotPayload singleRequestPayload
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
 	}))
 	defer ts.Close()
 
@@ -234,6 +270,7 @@ func TestClassifyDecodesOptionalSapphireFields(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(singleResponse{
 			Prediction:     PredictionMalicious,
 			Score:          0.91,
+			Threshold:      0.5,
 			PrimaryOutcome: "secret_exposure",
 			OutcomeScores:  map[string]float64{"secret_exposure": 0.8},
 			DetectorScores: map[string]float64{"secret_exposure": 1.0},
@@ -265,7 +302,7 @@ func TestClassifyNoOptionsOmitsHookAndToolName(t *testing.T) {
 	var raw map[string]any
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&raw)
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
 	}))
 	defer ts.Close()
 
@@ -279,6 +316,12 @@ func TestClassifyNoOptionsOmitsHookAndToolName(t *testing.T) {
 	if _, ok := raw["tool_name"]; ok {
 		t.Errorf("tool_name should be omitted: %v", raw)
 	}
+	if _, ok := raw["threshold"]; ok {
+		t.Errorf("threshold should be omitted: %v", raw)
+	}
+	if _, ok := raw["metadata"].(map[string]any)["silmaril"]; !ok {
+		t.Errorf("metadata.silmaril should be present: %v", raw)
+	}
 }
 
 func TestClassifySerializesMetadata(t *testing.T) {
@@ -287,7 +330,7 @@ func TestClassifySerializesMetadata(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
 			t.Fatal(err)
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
 	}))
 	defer ts.Close()
 
@@ -299,14 +342,16 @@ func TestClassifySerializesMetadata(t *testing.T) {
 			"message_id": "msg-123",
 		},
 	}
-	if _, err := fw.Classify(context.Background(), "hi", WithHook(HookUserInput), WithMetadata(metadata)); err != nil {
+	if _, err := fw.Classify(context.Background(), "hi",
+		WithHook(HookUserInput),
+		WithMetadata(metadata),
+		WithRequestID("req-meta"),
+	); err != nil {
 		t.Fatal(err)
 	}
-	if gotPayload.Metadata == nil {
-		t.Fatal("metadata was not serialized")
-	}
-	if !reflect.DeepEqual(*gotPayload.Metadata, metadata) {
-		t.Fatalf("metadata = %#v, want %#v", *gotPayload.Metadata, metadata)
+	requireSilmarilMetadata(t, gotPayload.Metadata, "req-meta", 0, 0, 1)
+	if !reflect.DeepEqual((*gotPayload.Metadata)["langgraph"], metadata["langgraph"]) {
+		t.Fatalf("langgraph metadata = %#v, want %#v", (*gotPayload.Metadata)["langgraph"], metadata["langgraph"])
 	}
 }
 
@@ -316,8 +361,8 @@ func TestClassifyBatchHappyPath(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
 		_ = json.NewEncoder(w).Encode(batchResponse{
 			Predictions: []singleResponse{
-				{Prediction: PredictionBenign, Score: 0.1},
-				{Prediction: PredictionMalicious, Score: 0.9},
+				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5},
+				{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5},
 			},
 		})
 	}))
@@ -328,6 +373,7 @@ func TestClassifyBatchHappyPath(t *testing.T) {
 		WithBatchHooks([]HookLabel{HookUserInput, HookUserInput}),
 		WithBatchToolNames([]string{"read_file", ""}),
 		WithBatchShadowMode(true),
+		WithBatchRequestID("req-batch"),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -338,15 +384,17 @@ func TestClassifyBatchHappyPath(t *testing.T) {
 	if results[0].Prediction != PredictionBenign || results[1].Prediction != PredictionMalicious {
 		t.Errorf("results = %+v", results)
 	}
-	if gotPayload.Threshold != adaptiveThreshold(2) {
-		t.Errorf("threshold = %v, want %v", gotPayload.Threshold, adaptiveThreshold(2))
-	}
 	if len(gotPayload.Hooks) != 2 || gotPayload.Hooks[0] != HookUserInput || gotPayload.Hooks[1] != HookUserInput {
 		t.Errorf("hooks = %v", gotPayload.Hooks)
 	}
 	if len(gotPayload.ToolNames) != 2 || gotPayload.ToolNames[0] == nil || *gotPayload.ToolNames[0] != "read_file" || gotPayload.ToolNames[1] != nil {
 		t.Errorf("tool_names = %v", gotPayload.ToolNames)
 	}
+	if len(gotPayload.Metadata) != 2 {
+		t.Fatalf("metadata length = %d, want 2", len(gotPayload.Metadata))
+	}
+	requireSilmarilMetadata(t, gotPayload.Metadata[0], "req-batch", 0, 0, 1)
+	requireSilmarilMetadata(t, gotPayload.Metadata[1], "req-batch", 1, 0, 1)
 }
 
 func TestClassifyBatchSerializesMetadata(t *testing.T) {
@@ -357,8 +405,8 @@ func TestClassifyBatchSerializesMetadata(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(batchResponse{
 			Predictions: []singleResponse{
-				{Prediction: PredictionBenign, Score: 0.1},
-				{Prediction: PredictionBenign, Score: 0.2},
+				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5},
+				{Prediction: PredictionBenign, Score: 0.2, Threshold: 0.5},
 			},
 		})
 	}))
@@ -369,32 +417,40 @@ func TestClassifyBatchSerializesMetadata(t *testing.T) {
 		{"langgraph": map[string]any{"run_id": "run-a"}},
 		nil,
 	}
-	if _, err := fw.ClassifyBatch(context.Background(), []string{"a", "b"}, WithBatchMetadata(metadata)); err != nil {
+	if _, err := fw.ClassifyBatch(context.Background(), []string{"a", "b"},
+		WithBatchMetadata(metadata),
+		WithBatchRequestID("req-batch-meta"),
+	); err != nil {
 		t.Fatal(err)
 	}
 	if len(gotPayload.Metadata) != 2 {
 		t.Fatalf("metadata length = %d, want 2", len(gotPayload.Metadata))
 	}
-	if gotPayload.Metadata[0] == nil {
-		t.Fatal("metadata[0] was not serialized")
+	requireSilmarilMetadata(t, gotPayload.Metadata[0], "req-batch-meta", 0, 0, 1)
+	if !reflect.DeepEqual((*gotPayload.Metadata[0])["langgraph"], metadata[0]["langgraph"]) {
+		t.Fatalf("metadata[0] langgraph = %#v, want %#v", (*gotPayload.Metadata[0])["langgraph"], metadata[0]["langgraph"])
 	}
-	if !reflect.DeepEqual(*gotPayload.Metadata[0], metadata[0]) {
-		t.Fatalf("metadata[0] = %#v, want %#v", *gotPayload.Metadata[0], metadata[0])
-	}
-	if gotPayload.Metadata[1] != nil {
-		t.Fatalf("metadata[1] = %#v, want nil", *gotPayload.Metadata[1])
-	}
+	requireSilmarilMetadata(t, gotPayload.Metadata[1], "req-batch-meta", 1, 0, 1)
 }
 
-func TestClassifyBatchAdaptiveThresholdScheduleOnWire(t *testing.T) {
+func TestClassifyBatchDoesNotSendThresholds(t *testing.T) {
 	var received []batchRequestPayload
+	var rawPayloads []map[string]any
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Fatal(err)
+		}
+		encoded, _ := json.Marshal(raw)
 		var payload batchRequestPayload
-		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if err := json.Unmarshal(encoded, &payload); err != nil {
+			t.Fatal(err)
+		}
 		received = append(received, payload)
+		rawPayloads = append(rawPayloads, raw)
 		predictions := make([]singleResponse, len(payload.Texts))
 		for i := range predictions {
-			predictions[i] = singleResponse{Prediction: PredictionBenign, Score: 0}
+			predictions[i] = singleResponse{Prediction: PredictionBenign, Score: 0, Threshold: 0.5}
 		}
 		_ = json.NewEncoder(w).Encode(batchResponse{Predictions: predictions})
 	}))
@@ -407,11 +463,16 @@ func TestClassifyBatchAdaptiveThresholdScheduleOnWire(t *testing.T) {
 	if _, err := fw.ClassifyBatch(context.Background(), []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"}); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := received[0].Threshold, adaptiveThreshold(5); got != want {
-		t.Errorf("5-item batch threshold = %v, want %v", got, want)
+	for i, raw := range rawPayloads {
+		if _, ok := raw["threshold"]; ok {
+			t.Errorf("request %d sent threshold: %v", i, raw)
+		}
+		if _, ok := raw["metadata"]; !ok {
+			t.Errorf("request %d omitted metadata: %v", i, raw)
+		}
 	}
-	if got := received[1].Threshold; got != maxAdaptiveThreshold {
-		t.Errorf("10-item batch threshold = %v, want %v", got, maxAdaptiveThreshold)
+	if len(received[0].Metadata) != 5 || len(received[1].Metadata) != 10 {
+		t.Fatalf("metadata lengths = %d, %d; want 5, 10", len(received[0].Metadata), len(received[1].Metadata))
 	}
 }
 
@@ -421,8 +482,8 @@ func TestClassifyBatchSanitizesInvalidUTF8Payload(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
 		_ = json.NewEncoder(w).Encode(batchResponse{
 			Predictions: []singleResponse{
-				{Prediction: PredictionBenign, Score: 0.1},
-				{Prediction: PredictionBenign, Score: 0.2},
+				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5},
+				{Prediction: PredictionBenign, Score: 0.2, Threshold: 0.5},
 			},
 		})
 	}))
@@ -441,10 +502,11 @@ func TestClassifyBatchDecodesOptionalSapphireFields(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(batchResponse{
 			Predictions: []singleResponse{
-				{Prediction: PredictionBenign, Score: 0.1},
+				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5},
 				{
 					Prediction:     PredictionMalicious,
 					Score:          0.9,
+					Threshold:      0.5,
 					PrimaryOutcome: "system_compromise",
 					OutcomeScores:  map[string]float64{"system_compromise": 0.92},
 					DetectorScores: map[string]float64{"information_disclosure": 0.85},
@@ -495,7 +557,7 @@ func TestClassifyBatchMismatchedHooks(t *testing.T) {
 
 func TestClassifyTrustsServerPrediction(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.99})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.99, Threshold: 0.5})
 	}))
 	defer ts.Close()
 
@@ -516,7 +578,7 @@ func TestClassifyRetriesOn429(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
 	}))
 	defer ts.Close()
 
@@ -551,7 +613,7 @@ func TestClassifyDrainsRetryBody(t *testing.T) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader(`{"prediction":"BENIGN","score":0.1}`)),
+				Body:       io.NopCloser(strings.NewReader(`{"prediction":"BENIGN","score":0.1,"threshold":0.5}`)),
 				Request:    req,
 			}, nil
 		}),
@@ -601,7 +663,7 @@ func TestClassifyDoesNotFollowRedirects(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		targetHit.Store(true)
 		leakedKey.Store(r.Header.Get("x-api-key"))
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
 	}))
 	defer target.Close()
 	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -706,7 +768,7 @@ func TestClassifyRetriesOnTransient5xx(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
 	}))
 	defer ts.Close()
 
@@ -732,7 +794,7 @@ func TestClassifyRetriesNetworkErrors(t *testing.T) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader(`{"prediction":"BENIGN","score":0.1}`)),
+				Body:       io.NopCloser(strings.NewReader(`{"prediction":"BENIGN","score":0.1,"threshold":0.5}`)),
 				Request:    req,
 			}, nil
 		}),
@@ -808,7 +870,7 @@ func TestClassifyHonorsRetryAfter(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
 	}))
 	defer ts.Close()
 
@@ -892,7 +954,7 @@ func TestClassifyChunksLongInputAndPicksMaxScore(t *testing.T) {
 			score = 0.95
 			prediction = PredictionMalicious
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: prediction, Score: score})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: prediction, Score: score, Threshold: 0.5})
 	}))
 	defer ts.Close()
 
@@ -908,11 +970,7 @@ func TestClassifyChunksLongInputAndPicksMaxScore(t *testing.T) {
 	if len(received) < 2 {
 		t.Errorf("expected multiple chunk requests, got %d", len(received))
 	}
-	wantThreshold := adaptiveThreshold(len(received))
 	for _, payload := range received {
-		if payload.Threshold != wantThreshold {
-			t.Errorf("threshold = %v, want %v", payload.Threshold, wantThreshold)
-		}
 		if payload.Hook != HookUserInput {
 			t.Errorf("hook = %q, want %q", payload.Hook, HookUserInput)
 		}
@@ -936,7 +994,7 @@ func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
 		mu.Lock()
 		received = append(received, payload)
 		mu.Unlock()
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
 	}))
 	defer ts.Close()
 
@@ -955,7 +1013,8 @@ func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
 	if len(received) < 2 {
 		t.Fatalf("expected multiple chunk requests, got %d", len(received))
 	}
-	wantThreshold := adaptiveThreshold(len(received))
+	seenChunkIndexes := map[int]bool{}
+	var requestID string
 	for i, payload := range received {
 		if payload.Hook != HookToolResponse {
 			t.Errorf("hook[%d] = %q, want %q", i, payload.Hook, HookToolResponse)
@@ -963,14 +1022,25 @@ func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
 		if payload.ToolName != "fetch_webpage" {
 			t.Errorf("tool_name[%d] = %q, want fetch_webpage", i, payload.ToolName)
 		}
-		if payload.Threshold != wantThreshold {
-			t.Errorf("threshold[%d] = %v, want %v", i, payload.Threshold, wantThreshold)
-		}
 		if payload.Metadata == nil {
 			t.Fatalf("metadata[%d] was not serialized", i)
 		}
 		if got := (*payload.Metadata)["langgraph"].(map[string]any)["run_id"]; got != "run-chunked" {
 			t.Errorf("metadata[%d] run_id = %v, want run-chunked", i, got)
+		}
+		silmaril := (*payload.Metadata)["silmaril"].(map[string]any)
+		raw := requireSilmarilMetadata(t, payload.Metadata, silmaril["request_id"].(string), 0, int(silmaril["chunk_index"].(float64)), len(received))
+		if requestID == "" {
+			requestID = raw["request_id"].(string)
+		}
+		if raw["request_id"] != requestID {
+			t.Errorf("metadata[%d] request_id = %v, want %s", i, raw["request_id"], requestID)
+		}
+		seenChunkIndexes[int(raw["chunk_index"].(float64))] = true
+	}
+	for i := range received {
+		if !seenChunkIndexes[i] {
+			t.Errorf("missing chunk_index %d in metadata", i)
 		}
 	}
 }
@@ -982,7 +1052,7 @@ func TestClassifyLongInputPropagatesChunkError(t *testing.T) {
 			http.Error(w, "boom", http.StatusBadRequest)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
 	}))
 	defer ts.Close()
 
@@ -1016,7 +1086,7 @@ func TestClassifyChunkConcurrencyLimit(t *testing.T) {
 		calls.Add(1)
 		time.Sleep(10 * time.Millisecond)
 		active.Add(-1)
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
 	}))
 	defer ts.Close()
 
