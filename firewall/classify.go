@@ -10,11 +10,10 @@ import (
 )
 
 type singleRequestPayload struct {
-	Text      string                  `json:"text"`
-	Hook      HookLabel               `json:"hook,omitempty"`
-	ToolName  string                  `json:"tool_name,omitempty"`
-	Metadata  *ClassificationMetadata `json:"metadata,omitempty"`
-	Threshold float64                 `json:"threshold"`
+	Text     string                  `json:"text"`
+	Hook     HookLabel               `json:"hook,omitempty"`
+	ToolName string                  `json:"tool_name,omitempty"`
+	Metadata *ClassificationMetadata `json:"metadata,omitempty"`
 }
 
 type batchRequestPayload struct {
@@ -22,12 +21,12 @@ type batchRequestPayload struct {
 	Hooks     []HookLabel               `json:"hooks,omitempty"`
 	ToolNames []*string                 `json:"tool_names,omitempty"`
 	Metadata  []*ClassificationMetadata `json:"metadata,omitempty"`
-	Threshold float64                   `json:"threshold"`
 }
 
 type singleResponse struct {
 	Prediction     Prediction         `json:"prediction"`
 	Score          float64            `json:"score"`
+	Threshold      float64            `json:"threshold"`
 	PrimaryOutcome string             `json:"primary_outcome"`
 	OutcomeScores  map[string]float64 `json:"outcome_scores"`
 	DetectorScores map[string]float64 `json:"detector_scores"`
@@ -46,6 +45,9 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	if cfg.requestID == "" {
+		cfg.requestID = newRequestID()
+	}
 	text = sanitizeText(text)
 	result, err := f.classifyRaw(ctx, text, cfg)
 	if err != nil {
@@ -54,7 +56,7 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 	event := f.newClassifyEvent(text, cfg.hook, cfg.toolName, result, f.effectiveShadowMode(cfg.shadowMode))
 	f.fireClassifyEvent(event)
 	if event.Blocked && !event.ShadowMode {
-		return result, promptBlockedErrorFromEvent(event)
+		return result, firewallBlockedErrorFromEvent(event)
 	}
 	return result, nil
 }
@@ -64,11 +66,10 @@ func (f *Firewall) classifyRaw(ctx context.Context, text string, cfg classifyCon
 	if err != nil {
 		return BlockResult{}, err
 	}
-	threshold := adaptiveThreshold(len(chunks))
 	if len(chunks) == 1 {
-		return f.classifySingleRaw(ctx, chunks[0], cfg, threshold)
+		return f.classifySingleRaw(ctx, chunks[0], cfg, 0, 1)
 	}
-	results, err := f.classifyChunksRaw(ctx, chunks, cfg, threshold)
+	results, err := f.classifyChunksRaw(ctx, chunks, cfg)
 	if err != nil {
 		return BlockResult{}, err
 	}
@@ -81,10 +82,14 @@ func (f *Firewall) classifyRaw(ctx context.Context, text string, cfg classifyCon
 	return best, nil
 }
 
-func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg classifyConfig, threshold float64) (BlockResult, error) {
+func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg classifyConfig, chunkIndex int, chunkCount int) (BlockResult, error) {
+	metadata, err := sdkMetadata(cfg.metadata, cfg.requestID, 0, chunkIndex, chunkCount)
+	if err != nil {
+		return BlockResult{}, err
+	}
 	payload := singleRequestPayload{
-		Text:      text,
-		Threshold: threshold,
+		Text:     text,
+		Metadata: metadata,
 	}
 	if cfg.hook != "" {
 		payload.Hook = cfg.hook
@@ -92,17 +97,14 @@ func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg class
 	if cfg.toolName != "" {
 		payload.ToolName = cfg.toolName
 	}
-	if cfg.metadata != nil {
-		payload.Metadata = cfg.metadata
-	}
 	var resp singleResponse
 	if err := f.postJSON(ctx, payload, &resp); err != nil {
 		return BlockResult{}, err
 	}
-	return blockResultFromResponse(resp, threshold)
+	return blockResultFromResponse(resp)
 }
 
-func (f *Firewall) classifyChunksRaw(ctx context.Context, chunks []string, cfg classifyConfig, threshold float64) ([]BlockResult, error) {
+func (f *Firewall) classifyChunksRaw(ctx context.Context, chunks []string, cfg classifyConfig) ([]BlockResult, error) {
 	workers := f.chunkConcurrency
 	if workers > len(chunks) {
 		workers = len(chunks)
@@ -119,7 +121,7 @@ func (f *Firewall) classifyChunksRaw(ctx context.Context, chunks []string, cfg c
 		go func() {
 			defer wg.Done()
 			for index := range jobs {
-				result, err := f.classifySingleRaw(ctx, chunks[index], cfg, threshold)
+				result, err := f.classifySingleRaw(ctx, chunks[index], cfg, index, len(chunks))
 				if err != nil {
 					mu.Lock()
 					if firstErr == nil {
@@ -152,6 +154,9 @@ func (f *Firewall) ClassifyBatch(ctx context.Context, texts []string, opts ...Ba
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	if cfg.requestID == "" {
+		cfg.requestID = newRequestID()
+	}
 	texts = sanitizeTexts(texts)
 	results, err := f.classifyBatchRaw(ctx, texts, cfg)
 	if err != nil {
@@ -173,7 +178,7 @@ func (f *Firewall) ClassifyBatch(ctx context.Context, texts []string, opts ...Ba
 		}
 	}
 	if len(blocked) > 0 {
-		return results, &BatchPromptBlockedError{Blocked: blocked}
+		return results, &BatchFirewallBlockedError{Blocked: blocked}
 	}
 	return results, nil
 }
@@ -192,10 +197,8 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 	if cfg.metadataSet && len(cfg.metadata) != len(texts) {
 		return nil, fmt.Errorf("firewall: metadata length %d does not match texts length %d", len(cfg.metadata), len(texts))
 	}
-	threshold := adaptiveThreshold(len(texts))
 	payload := batchRequestPayload{
-		Texts:     texts,
-		Threshold: threshold,
+		Texts: texts,
 	}
 	if len(cfg.hooks) > 0 {
 		payload.Hooks = cfg.hooks
@@ -203,9 +206,11 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 	if len(cfg.toolNames) > 0 {
 		payload.ToolNames = batchToolNames(cfg.toolNames)
 	}
-	if cfg.metadataSet {
-		payload.Metadata = batchMetadata(cfg.metadata)
+	metadata, err := batchMetadata(cfg, len(texts))
+	if err != nil {
+		return nil, err
 	}
+	payload.Metadata = metadata
 	var resp batchResponse
 	if err := f.postJSON(ctx, payload, &resp); err != nil {
 		return nil, err
@@ -215,7 +220,7 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 	}
 	results := make([]BlockResult, len(resp.Predictions))
 	for i, p := range resp.Predictions {
-		result, err := blockResultFromResponse(p, threshold)
+		result, err := blockResultFromResponse(p)
 		if err != nil {
 			return nil, err
 		}
@@ -258,8 +263,8 @@ func safeClassifyCallback(fn func(ClassifyEvent), event ClassifyEvent) {
 	fn(event)
 }
 
-func promptBlockedErrorFromEvent(event ClassifyEvent) *PromptBlockedError {
-	return &PromptBlockedError{
+func firewallBlockedErrorFromEvent(event ClassifyEvent) *FirewallBlockedError {
+	return &FirewallBlockedError{
 		Score:      event.Result.Score,
 		Threshold:  event.Result.Threshold,
 		PromptText: event.Text,
@@ -314,30 +319,34 @@ func batchToolNames(names []string) []*string {
 	return out
 }
 
-func batchMetadata(metadata []ClassificationMetadata) []*ClassificationMetadata {
-	out := make([]*ClassificationMetadata, len(metadata))
-	for i, item := range metadata {
-		if item == nil {
-			continue
+func batchMetadata(cfg batchClassifyConfig, length int) ([]*ClassificationMetadata, error) {
+	out := make([]*ClassificationMetadata, length)
+	for i := 0; i < length; i++ {
+		var item *ClassificationMetadata
+		if cfg.metadataSet && cfg.metadata[i] != nil {
+			item = &cfg.metadata[i]
 		}
-		item := item
-		out[i] = &item
+		metadata, err := sdkMetadata(item, cfg.requestID, i, 0, 1)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = metadata
 	}
-	return out
+	return out, nil
 }
 
-func blockResultFromResponse(resp singleResponse, threshold float64) (BlockResult, error) {
+func blockResultFromResponse(resp singleResponse) (BlockResult, error) {
 	switch resp.Prediction {
 	case PredictionBenign, PredictionMalicious:
 	case "":
-		resp.Prediction = predictionForScore(resp.Score, threshold)
+		resp.Prediction = predictionForScore(resp.Score, resp.Threshold)
 	default:
 		return BlockResult{}, fmt.Errorf("firewall: invalid prediction %q", resp.Prediction)
 	}
 	return BlockResult{
 		Prediction:     resp.Prediction,
 		Score:          resp.Score,
-		Threshold:      threshold,
+		Threshold:      resp.Threshold,
 		PrimaryOutcome: resp.PrimaryOutcome,
 		OutcomeScores:  resp.OutcomeScores,
 		DetectorScores: resp.DetectorScores,

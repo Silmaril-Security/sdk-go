@@ -31,9 +31,9 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("Silmaril API error %d %s", e.Status, e.StatusText)
 }
 
-// PromptBlockedError is returned by Classify when a classified prompt meets or
-// exceeds the effective threshold and shadow mode is not enabled.
-type PromptBlockedError struct {
+// FirewallBlockedError is returned by Classify when a classified request is
+// blocked by the Firewall and shadow mode is not enabled.
+type FirewallBlockedError struct {
 	Score      float64
 	Threshold  float64
 	PromptText string
@@ -42,9 +42,14 @@ type PromptBlockedError struct {
 	Result     BlockResult
 }
 
-func (e *PromptBlockedError) Error() string {
-	return fmt.Sprintf("firewall: prompt blocked (score=%.4f, threshold=%.4f)", e.Score, e.Threshold)
+func (e *FirewallBlockedError) Error() string {
+	return fmt.Sprintf("firewall: request blocked (score=%.4f, threshold=%.4f)", e.Score, e.Threshold)
 }
+
+// PromptBlockedError is the old name for FirewallBlockedError.
+//
+// Deprecated: use FirewallBlockedError.
+type PromptBlockedError = FirewallBlockedError
 
 // BlockedBatchItem describes one blocked item in a ClassifyBatch call.
 type BlockedBatchItem struct {
@@ -55,22 +60,26 @@ type BlockedBatchItem struct {
 	Result   BlockResult
 }
 
-// BatchPromptBlockedError is returned by ClassifyBatch when one or more
-// classified texts meet or exceed the effective threshold and shadow mode is
-// not enabled.
-type BatchPromptBlockedError struct {
+// BatchFirewallBlockedError is returned by ClassifyBatch when one or more
+// classified texts are blocked by the Firewall and shadow mode is not enabled.
+type BatchFirewallBlockedError struct {
 	Blocked []BlockedBatchItem
 }
 
-func (e *BatchPromptBlockedError) Error() string {
+func (e *BatchFirewallBlockedError) Error() string {
 	if len(e.Blocked) == 1 {
 		item := e.Blocked[0]
 		return fmt.Sprintf(
-			"firewall: batch prompt blocked at index %d (score=%.4f, threshold=%.4f)",
+			"firewall: batch request blocked at index %d (score=%.4f, threshold=%.4f)",
 			item.Index,
 			item.Result.Score,
 			item.Result.Threshold,
 		)
 	}
-	return fmt.Sprintf("firewall: batch prompts blocked (%d items)", len(e.Blocked))
+	return fmt.Sprintf("firewall: batch requests blocked (%d items)", len(e.Blocked))
 }
+
+// BatchPromptBlockedError is the old name for BatchFirewallBlockedError.
+//
+// Deprecated: use BatchFirewallBlockedError.
+type BatchPromptBlockedError = BatchFirewallBlockedError
