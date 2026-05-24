@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## v0.4.0
+
+- Moves score-threshold decisions fully to the Firewall backend. The SDK no
+  longer sends a client-side `threshold` field, while `BlockResult.Threshold`
+  continues to report the backend-applied value for diagnostics.
+- Adds SDK reconstruction metadata under `metadata.silmaril`, including
+  language, SDK version, request id, input index, chunk index, and chunk count.
+- Adds `WithRequestID` and `WithBatchRequestID` for callers that need to
+  correlate SDK metadata with their own request traces.
+- Renames blocking errors to `FirewallBlockedError` and
+  `BatchFirewallBlockedError`, with the previous `PromptBlockedError` and
+  `BatchPromptBlockedError` names retained as deprecated aliases for one
+  release.
+- Adds GitHub Actions CI and release automation for formatting, tidy, vet,
+  race tests, semantic version tags, Go module proxy warming, and GitHub
+  release creation.
+
 ## v0.3.2
 
 - Adds request metadata support to `Classify` and `ClassifyBatch`, including

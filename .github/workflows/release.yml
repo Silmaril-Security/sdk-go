@@ -108,6 +108,28 @@ jobs:
         if: steps.plan.outputs.should_release == 'true'
         run: go test -race ./...
 
+      - name: Extract changelog notes
+        id: changelog
+        if: steps.plan.outputs.should_release == 'true'
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          notes_file="${RUNNER_TEMP}/${TAG}-notes.md"
+          awk -v tag="$TAG" '
+            $0 == "## " tag { found=1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md > "$notes_file"
+
+          if ! grep -q '[^[:space:]]' "$notes_file"; then
+            echo "::error::CHANGELOG.md is missing release notes for ${TAG}."
+            exit 1
+          fi
+
+          echo "notes_file=${notes_file}" >> "$GITHUB_OUTPUT"
+
       - name: Push release tag
         if: steps.plan.outputs.should_release == 'true'
         env:
@@ -140,10 +162,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.plan.outputs.tag }}
+          NOTES_FILE: ${{ steps.changelog.outputs.notes_file }}
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; skipping."
           else
-            gh release create "$TAG" --title "$TAG" --notes "Release $TAG"
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file "$NOTES_FILE"
           fi
