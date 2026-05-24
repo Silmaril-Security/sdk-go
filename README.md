@@ -12,6 +12,12 @@ Language SDK repositories follow the `sdk-<language>` naming pattern. The Go
 client package lives in `firewall/` and is imported from
 `github.com/Silmaril-Security/sdk-go/firewall`.
 
+This repository is public so Go users can inspect, pin, and build against
+tagged SDK releases. The SDK is source-available under the Silmaril SDK
+Source-Available License; it is not permissive open source. See
+[LICENSE](LICENSE) before copying, redistributing, modifying, or using the SDK
+outside an integration with Silmaril services.
+
 This SDK provides the low-level Go interface for that workflow:
 
 - Create a tenant-specific firewall client.
@@ -234,7 +240,7 @@ _, err := fw.Classify(ctx, text,
     firewall.WithHook(firewall.HookUserInput),
     firewall.WithMetadata(firewall.ClassificationMetadata{
         "langgraph": map[string]any{
-            "thread_id":  "customer-thread-123",
+            "thread_id":  "thread-123",
             "run_id":     "langgraph-run-456",
             "message_id": "message-789",
         },
@@ -284,7 +290,7 @@ All error types satisfy `error` and work with `errors.As`.
 Long inputs are chunked client-side into 400-token overlapping windows
 (64-token overlap). The maximum input is 81,920 tokens. For `Classify`, chunks
 are sent as bounded parallel single-text requests using `Options.ChunkConcurrency`
-(default: 8), letting API Gateway and SageMaker distribute work across serving
+(default: 8), letting the Firewall service distribute work across serving
 instances. The highest score is returned.
 
 Set `ChunkConcurrency: 1` to send chunk requests sequentially. `ClassifyBatch`
@@ -340,6 +346,11 @@ make check
 ```
 
 This runs `gofmt`, `go mod tidy`, `go vet ./...`, and `go test -race ./...`.
+
+Public contributions should avoid tenant names, customer prompts, private
+endpoints, API keys, internal benchmarks, and live-environment examples. Use
+generic examples and local test servers unless maintainers explicitly request
+otherwise.
 
 ## License
 
