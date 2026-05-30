@@ -62,9 +62,13 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 }
 
 func (f *Firewall) classifyRaw(ctx context.Context, text string, cfg classifyConfig) (BlockResult, error) {
-	chunks, err := ChunkText(text)
-	if err != nil {
-		return BlockResult{}, err
+	chunks := []string{text}
+	var err error
+	if len(text) > ServerSingleTextMaxChars {
+		chunks, err = ChunkText(text)
+		if err != nil {
+			return BlockResult{}, err
+		}
 	}
 	if len(chunks) == 1 {
 		return f.classifySingleRaw(ctx, chunks[0], cfg, 0, 1)

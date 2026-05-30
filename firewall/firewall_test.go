@@ -959,7 +959,7 @@ func TestClassifyChunksLongInputAndPicksMaxScore(t *testing.T) {
 	defer ts.Close()
 
 	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
-	long := strings.Repeat("a", ChunkWindowChars*3)
+	long := strings.Repeat("a", ServerSingleTextMaxChars+ChunkWindowChars*3)
 	res, err := fw.Classify(context.Background(), long, WithHook(HookUserInput))
 	if err != nil {
 		t.Fatal(err)
@@ -983,6 +983,32 @@ func TestClassifyChunksLongInputAndPicksMaxScore(t *testing.T) {
 	}
 }
 
+func TestClassifySendsNormalSizeLongInputAsSingleRequest(t *testing.T) {
+	var calls atomic.Int32
+	var received singleRequestPayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
+	long := strings.Repeat("a", ChunkWindowChars*3)
+	if _, err := fw.Classify(context.Background(), long); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("HTTP calls = %d, want 1", calls.Load())
+	}
+	if received.Text != long {
+		t.Fatalf("text length = %d, want %d", len(received.Text), len(long))
+	}
+	requireSilmarilMetadata(t, received.Metadata, (*received.Metadata)["silmaril"].(map[string]any)["request_id"].(string), 0, 0, 1)
+}
+
 func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
 	var mu sync.Mutex
 	var received []singleRequestPayload
@@ -999,7 +1025,7 @@ func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
 	defer ts.Close()
 
 	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
-	long := strings.Repeat("b", ChunkWindowChars*2)
+	long := strings.Repeat("b", ServerSingleTextMaxChars+ChunkWindowChars*2)
 	_, err := fw.Classify(
 		context.Background(),
 		long,
@@ -1057,7 +1083,7 @@ func TestClassifyLongInputPropagatesChunkError(t *testing.T) {
 	defer ts.Close()
 
 	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
-	long := strings.Repeat("a", ChunkWindowChars*3)
+	long := strings.Repeat("a", ServerSingleTextMaxChars+ChunkWindowChars*3)
 	_, err := fw.Classify(context.Background(), long)
 	if err == nil {
 		t.Fatal("expected chunk error")
@@ -1091,7 +1117,7 @@ func TestClassifyChunkConcurrencyLimit(t *testing.T) {
 	defer ts.Close()
 
 	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ChunkConcurrency: 2, ShadowMode: true})
-	long := strings.Repeat("a", ChunkWindowChars*5)
+	long := strings.Repeat("a", ServerSingleTextMaxChars+ChunkWindowChars*5)
 	if _, err := fw.Classify(context.Background(), long); err != nil {
 		t.Fatal(err)
 	}

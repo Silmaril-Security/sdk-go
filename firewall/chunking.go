@@ -11,14 +11,15 @@ import (
 // Chunking constants mirror the Python and TypeScript SDKs so the three
 // clients split long inputs identically.
 const (
-	CharsPerToken     = 4
-	MaxInputTokens    = 81_920
-	ChunkWindow       = 400
-	ChunkOverlap      = 64
-	MaxInputChars     = MaxInputTokens * CharsPerToken
-	ChunkWindowChars  = ChunkWindow * CharsPerToken
-	ChunkOverlapChars = ChunkOverlap * CharsPerToken
-	chunkStrideChars  = ChunkWindowChars - ChunkOverlapChars
+	CharsPerToken            = 4
+	MaxInputTokens           = 81_920
+	ChunkWindow              = 400
+	ChunkOverlap             = 64
+	ServerSingleTextMaxChars = 50_000
+	MaxInputChars            = MaxInputTokens * CharsPerToken
+	ChunkWindowChars         = ChunkWindow * CharsPerToken
+	ChunkOverlapChars        = ChunkOverlap * CharsPerToken
+	chunkStrideChars         = ChunkWindowChars - ChunkOverlapChars
 )
 
 // ChunkText splits text into overlapping rune windows for server

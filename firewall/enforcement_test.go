@@ -211,7 +211,7 @@ func TestClassifyLongInputBlocksOnceUsingHighestScore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text := strings.Repeat("a", ChunkWindowChars*2)
+	text := strings.Repeat("a", ServerSingleTextMaxChars+ChunkWindowChars*2)
 	result, err := fw.Classify(context.Background(), text, WithHook(HookUserInput))
 	if err == nil {
 		t.Fatal("expected firewall blocked error")
