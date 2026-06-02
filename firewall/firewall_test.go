@@ -271,10 +271,10 @@ func TestClassifyDecodesOptionalSapphireFields(t *testing.T) {
 			Prediction:     PredictionMalicious,
 			Score:          0.91,
 			Threshold:      0.5,
-			PrimaryOutcome: "secret_exposure",
-			OutcomeScores:  map[string]float64{"secret_exposure": 0.8},
-			DetectorScores: map[string]float64{"secret_exposure": 1.0},
-			DetectorCounts: map[string]int{"secret_exposure": 2},
+			PrimaryOutcome: primaryOutcomePtr(OutcomeSecretExposure),
+			OutcomeScores:  map[string]float64{OutcomeSecretExposure: 0.8},
+			DetectorScores: map[string]float64{OutcomeSecretExposure: 1.0},
+			DetectorCounts: map[string]int{OutcomeSecretExposure: 2},
 		})
 	}))
 	defer ts.Close()
@@ -284,16 +284,16 @@ func TestClassifyDecodesOptionalSapphireFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.PrimaryOutcome != "secret_exposure" {
+	if res.PrimaryOutcome != OutcomeSecretExposure {
 		t.Errorf("primary outcome = %q", res.PrimaryOutcome)
 	}
-	if res.OutcomeScores["secret_exposure"] != 0.8 {
+	if res.OutcomeScores[OutcomeSecretExposure] != 0.8 {
 		t.Errorf("outcome scores = %+v", res.OutcomeScores)
 	}
-	if res.DetectorScores["secret_exposure"] != 1.0 {
+	if res.DetectorScores[OutcomeSecretExposure] != 1.0 {
 		t.Errorf("detector scores = %+v", res.DetectorScores)
 	}
-	if res.DetectorCounts["secret_exposure"] != 2 {
+	if res.DetectorCounts[OutcomeSecretExposure] != 2 {
 		t.Errorf("detector counts = %+v", res.DetectorCounts)
 	}
 }
@@ -507,10 +507,10 @@ func TestClassifyBatchDecodesOptionalSapphireFields(t *testing.T) {
 					Prediction:     PredictionMalicious,
 					Score:          0.9,
 					Threshold:      0.5,
-					PrimaryOutcome: "system_compromise",
-					OutcomeScores:  map[string]float64{"system_compromise": 0.92},
-					DetectorScores: map[string]float64{"information_disclosure": 0.85},
-					DetectorCounts: map[string]int{"information_disclosure": 1},
+					PrimaryOutcome: primaryOutcomePtr(OutcomeSystemCompromise),
+					OutcomeScores:  map[string]float64{OutcomeSystemCompromise: 0.92},
+					DetectorScores: map[string]float64{OutcomeInformationDisclosure: 0.85},
+					DetectorCounts: map[string]int{OutcomeInformationDisclosure: 1},
 				},
 			},
 		})
@@ -525,16 +525,16 @@ func TestClassifyBatchDecodesOptionalSapphireFields(t *testing.T) {
 	if results[0].PrimaryOutcome != "" || results[0].OutcomeScores != nil {
 		t.Errorf("unexpected Sapphire fields on binary result: %+v", results[0])
 	}
-	if results[1].PrimaryOutcome != "system_compromise" {
+	if results[1].PrimaryOutcome != OutcomeSystemCompromise {
 		t.Errorf("primary outcome = %q", results[1].PrimaryOutcome)
 	}
-	if results[1].OutcomeScores["system_compromise"] != 0.92 {
+	if results[1].OutcomeScores[OutcomeSystemCompromise] != 0.92 {
 		t.Errorf("outcome scores = %+v", results[1].OutcomeScores)
 	}
-	if results[1].DetectorScores["information_disclosure"] != 0.85 {
+	if results[1].DetectorScores[OutcomeInformationDisclosure] != 0.85 {
 		t.Errorf("detector scores = %+v", results[1].DetectorScores)
 	}
-	if results[1].DetectorCounts["information_disclosure"] != 1 {
+	if results[1].DetectorCounts[OutcomeInformationDisclosure] != 1 {
 		t.Errorf("detector counts = %+v", results[1].DetectorCounts)
 	}
 }
