@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.4.1
+
+- Adds typed firewall outcome constants, ordered outcome accessors,
+  descriptions, validation helpers, and response normalization.
+- Types `BlockResult.PrimaryOutcome`, `OutcomeScores`, `DetectorScores`, and
+  `DetectorCounts` around the canonical outcome taxonomy.
+- Documents simple outcome routing examples using `WithShadowMode(true)`.
+
 ## v0.4.0
 
 - Moves score-threshold decisions fully to the Firewall backend. The SDK no

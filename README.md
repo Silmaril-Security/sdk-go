@@ -41,7 +41,7 @@ go get github.com/Silmaril-Security/sdk-go/firewall@latest
 For reproducible installs, pin a tagged release:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.4.0
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.4.1
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
