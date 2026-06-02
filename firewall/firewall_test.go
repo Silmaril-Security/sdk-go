@@ -271,10 +271,10 @@ func TestClassifyDecodesOptionalSapphireFields(t *testing.T) {
 			Prediction:     PredictionMalicious,
 			Score:          0.91,
 			Threshold:      0.5,
-			PrimaryOutcome: primaryOutcomePtr(OutcomeSecretExposure),
-			OutcomeScores:  map[string]float64{OutcomeSecretExposure: 0.8},
-			DetectorScores: map[string]float64{OutcomeSecretExposure: 1.0},
-			DetectorCounts: map[string]int{OutcomeSecretExposure: 2},
+			PrimaryOutcome: primaryOutcomePtr(string(OutcomeSecretExposure)),
+			OutcomeScores:  map[string]float64{string(OutcomeSecretExposure): 0.8},
+			DetectorScores: map[string]float64{string(OutcomeSecretExposure): 1.0},
+			DetectorCounts: map[string]int{string(OutcomeSecretExposure): 2},
 		})
 	}))
 	defer ts.Close()
@@ -287,13 +287,13 @@ func TestClassifyDecodesOptionalSapphireFields(t *testing.T) {
 	if res.PrimaryOutcome != OutcomeSecretExposure {
 		t.Errorf("primary outcome = %q", res.PrimaryOutcome)
 	}
-	if res.OutcomeScores[OutcomeSecretExposure] != 0.8 {
+	if res.OutcomeScores[HarmfulOutcomeSecretExposure] != 0.8 {
 		t.Errorf("outcome scores = %+v", res.OutcomeScores)
 	}
-	if res.DetectorScores[OutcomeSecretExposure] != 1.0 {
+	if res.DetectorScores[HarmfulOutcomeSecretExposure] != 1.0 {
 		t.Errorf("detector scores = %+v", res.DetectorScores)
 	}
-	if res.DetectorCounts[OutcomeSecretExposure] != 2 {
+	if res.DetectorCounts[HarmfulOutcomeSecretExposure] != 2 {
 		t.Errorf("detector counts = %+v", res.DetectorCounts)
 	}
 }
@@ -507,10 +507,10 @@ func TestClassifyBatchDecodesOptionalSapphireFields(t *testing.T) {
 					Prediction:     PredictionMalicious,
 					Score:          0.9,
 					Threshold:      0.5,
-					PrimaryOutcome: primaryOutcomePtr(OutcomeSystemCompromise),
-					OutcomeScores:  map[string]float64{OutcomeSystemCompromise: 0.92},
-					DetectorScores: map[string]float64{OutcomeInformationDisclosure: 0.85},
-					DetectorCounts: map[string]int{OutcomeInformationDisclosure: 1},
+					PrimaryOutcome: primaryOutcomePtr(string(OutcomeSystemCompromise)),
+					OutcomeScores:  map[string]float64{string(OutcomeSystemCompromise): 0.92},
+					DetectorScores: map[string]float64{string(OutcomeInformationDisclosure): 0.85},
+					DetectorCounts: map[string]int{string(OutcomeInformationDisclosure): 1},
 				},
 			},
 		})
@@ -528,13 +528,13 @@ func TestClassifyBatchDecodesOptionalSapphireFields(t *testing.T) {
 	if results[1].PrimaryOutcome != OutcomeSystemCompromise {
 		t.Errorf("primary outcome = %q", results[1].PrimaryOutcome)
 	}
-	if results[1].OutcomeScores[OutcomeSystemCompromise] != 0.92 {
+	if results[1].OutcomeScores[HarmfulOutcomeSystemCompromise] != 0.92 {
 		t.Errorf("outcome scores = %+v", results[1].OutcomeScores)
 	}
-	if results[1].DetectorScores[OutcomeInformationDisclosure] != 0.85 {
+	if results[1].DetectorScores[HarmfulOutcomeInformationDisclosure] != 0.85 {
 		t.Errorf("detector scores = %+v", results[1].DetectorScores)
 	}
-	if results[1].DetectorCounts[OutcomeInformationDisclosure] != 1 {
+	if results[1].DetectorCounts[HarmfulOutcomeInformationDisclosure] != 1 {
 		t.Errorf("detector counts = %+v", results[1].DetectorCounts)
 	}
 }

@@ -20,30 +20,52 @@ func TestOutcomeTaxonomyExportsOrderedValues(t *testing.T) {
 		OutcomeSystemCompromise,
 		OutcomeServiceDisruption,
 	}
-	if len(PrimaryOutcomes) != len(wantPrimary) {
-		t.Fatalf("PrimaryOutcomes length = %d, want %d", len(PrimaryOutcomes), len(wantPrimary))
+	primaryOutcomes := PrimaryOutcomes()
+	descriptions := OutcomeDescriptions()
+	if len(primaryOutcomes) != len(wantPrimary) {
+		t.Fatalf("PrimaryOutcomes length = %d, want %d", len(primaryOutcomes), len(wantPrimary))
 	}
 	for i, want := range wantPrimary {
-		if PrimaryOutcomes[i] != want {
-			t.Fatalf("PrimaryOutcomes[%d] = %q, want %q", i, PrimaryOutcomes[i], want)
+		if primaryOutcomes[i] != want {
+			t.Fatalf("PrimaryOutcomes[%d] = %q, want %q", i, primaryOutcomes[i], want)
 		}
-		if OutcomeDescriptions[want] == "" {
+		if descriptions[want] == "" {
 			t.Fatalf("missing description for %q", want)
 		}
 		if !IsPrimaryOutcome(want) {
 			t.Fatalf("%q should be a primary outcome", want)
 		}
 	}
-	if IsHarmfulOutcome(OutcomeBenign) {
+	if IsHarmfulOutcome(HarmfulOutcome(OutcomeBenign)) {
 		t.Fatal("benign should not be a harmful outcome")
 	}
-	if !IsHarmfulOutcome(OutcomeSecretExposure) {
+	if !IsHarmfulOutcome(HarmfulOutcomeSecretExposure) {
 		t.Fatal("secret exposure should be a harmful outcome")
 	}
 }
 
+func TestOutcomeTaxonomyAccessorsReturnCopies(t *testing.T) {
+	primary := PrimaryOutcomes()
+	primary[0] = "mutated"
+	if PrimaryOutcomes()[0] != OutcomeBenign {
+		t.Fatal("PrimaryOutcomes should return a copy")
+	}
+
+	harmful := HarmfulOutcomes()
+	harmful[0] = "mutated"
+	if HarmfulOutcomes()[0] != HarmfulOutcomeInformationDisclosure {
+		t.Fatal("HarmfulOutcomes should return a copy")
+	}
+
+	descriptions := OutcomeDescriptions()
+	descriptions[OutcomeBenign] = "mutated"
+	if OutcomeDescriptions()[OutcomeBenign] == "mutated" {
+		t.Fatal("OutcomeDescriptions should return a copy")
+	}
+}
+
 func TestBlockResultFromResponseDecodesTypedOutcomes(t *testing.T) {
-	for _, outcome := range PrimaryOutcomes {
+	for _, outcome := range PrimaryOutcomes() {
 		resp := singleResponse{
 			Prediction:     PredictionBenign,
 			Score:          0.1,
@@ -67,23 +89,23 @@ func TestBlockResultFromResponseValidatesOutcomeFields(t *testing.T) {
 		want string
 	}{
 		{
-			name: "primary",
-			resp: singleResponse{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, PrimaryOutcome: primaryOutcomePtr("unknown")},
+			name: "empty primary",
+			resp: singleResponse{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, PrimaryOutcome: primaryOutcomePtr("")},
 			want: "invalid primary_outcome",
 		},
 		{
-			name: "outcome scores",
-			resp: singleResponse{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, OutcomeScores: map[string]float64{"unknown": 0.8}},
+			name: "benign outcome scores",
+			resp: singleResponse{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, OutcomeScores: map[string]float64{string(OutcomeBenign): 0.8}},
 			want: "invalid outcome_scores key",
 		},
 		{
-			name: "detector scores",
-			resp: singleResponse{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, DetectorScores: map[string]float64{"unknown": 0.8}},
+			name: "benign detector scores",
+			resp: singleResponse{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, DetectorScores: map[string]float64{string(OutcomeBenign): 0.8}},
 			want: "invalid detector_scores key",
 		},
 		{
-			name: "detector counts",
-			resp: singleResponse{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, DetectorCounts: map[string]int{"unknown": 1}},
+			name: "benign detector counts",
+			resp: singleResponse{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, DetectorCounts: map[string]int{string(OutcomeBenign): 1}},
 			want: "invalid detector_counts key",
 		},
 	}
@@ -98,5 +120,34 @@ func TestBlockResultFromResponseValidatesOutcomeFields(t *testing.T) {
 				t.Fatalf("error = %q, want substring %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBlockResultFromResponseDecodesFutureOutcomeLabels(t *testing.T) {
+	resp := singleResponse{
+		Prediction:     PredictionMalicious,
+		Score:          0.9,
+		Threshold:      0.5,
+		PrimaryOutcome: primaryOutcomePtr("data_exfiltration"),
+		OutcomeScores:  map[string]float64{"data_exfiltration": 0.8},
+		DetectorScores: map[string]float64{"new_detector": 0.7},
+		DetectorCounts: map[string]int{"new_detector": 1},
+	}
+
+	result, err := blockResultFromResponse(resp)
+	if err != nil {
+		t.Fatalf("decode failed: %v", err)
+	}
+	if result.PrimaryOutcome != PrimaryOutcome("data_exfiltration") {
+		t.Fatalf("PrimaryOutcome = %q", result.PrimaryOutcome)
+	}
+	if result.OutcomeScores[HarmfulOutcome("data_exfiltration")] != 0.8 {
+		t.Fatalf("OutcomeScores = %+v", result.OutcomeScores)
+	}
+	if result.DetectorScores[HarmfulOutcome("new_detector")] != 0.7 {
+		t.Fatalf("DetectorScores = %+v", result.DetectorScores)
+	}
+	if result.DetectorCounts[HarmfulOutcome("new_detector")] != 1 {
+		t.Fatalf("DetectorCounts = %+v", result.DetectorCounts)
 	}
 }
