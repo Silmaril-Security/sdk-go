@@ -151,6 +151,49 @@ non-zero. If the clone has no `CheckRedirect` policy, the SDK installs a
 no-redirect policy; explicit caller-provided redirect policies are preserved and
 can forward custom headers.
 
+## Handle Outcomes
+
+Use per-call shadow mode when you want direct `Classify` calls to return the
+result for application routing instead of returning a blocking error:
+
+```go
+result, err := fw.Classify(ctx, userInput,
+    firewall.WithHook(firewall.HookUserInput),
+    firewall.WithShadowMode(true),
+)
+if err != nil {
+    log.Fatal(err)
+}
+
+if result.Score < result.Threshold {
+    continueNormally()
+} else {
+    switch result.PrimaryOutcome {
+    case firewall.OutcomeSecretExposure:
+        redactAndSuppress(result)
+    case firewall.OutcomeInformationDisclosure:
+        requireReview(result)
+    case firewall.OutcomeControlAbuse:
+        denyAndAskForConfirmation(result)
+    case firewall.OutcomeSystemCompromise:
+        blockAndEscalate(result)
+    case firewall.OutcomeServiceDisruption:
+        blockDisruptiveAction(result)
+    default:
+        blockByDefault(result)
+    }
+}
+```
+
+Outcome taxonomy:
+
+- `benign`: no harmful firewall outcome detected.
+- `information_disclosure`: private data, documents, internal context, logs, traces, customer data, SQL rows, topology, or similar non-secret sensitive information.
+- `secret_exposure`: credentials, tokens, API keys, cookies, passwords, signing keys, OAuth secrets, session material, or webhook secrets.
+- `control_abuse`: misuse of authorized tools or user privileges to send, change, approve, delete, operate, or bypass policy/RBAC without a stronger outcome.
+- `system_compromise`: privilege escalation, account takeover, hostile integration/plugin takeover, persistence, lateral movement, attacker webhook registration, or code/plugin execution.
+- `service_disruption`: downtime, lockout, degradation, alert suppression, destructive loops, resource exhaustion, cost spikes, or hidden outage evidence.
+
 ## Backend Thresholding
 
 Customers do not tune score thresholds in the SDK. Tenant Firewall config owns

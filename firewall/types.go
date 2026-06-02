@@ -17,13 +17,13 @@ const (
 
 // BlockResult is the output of a single classification call.
 type BlockResult struct {
-	Prediction     Prediction         `json:"prediction"`
-	Score          float64            `json:"score"`
-	Threshold      float64            `json:"threshold"`
-	PrimaryOutcome string             `json:"primary_outcome,omitempty"`
-	OutcomeScores  map[string]float64 `json:"outcome_scores,omitempty"`
-	DetectorScores map[string]float64 `json:"detector_scores,omitempty"`
-	DetectorCounts map[string]int     `json:"detector_counts,omitempty"`
+	Prediction     Prediction                 `json:"prediction"`
+	Score          float64                    `json:"score"`
+	Threshold      float64                    `json:"threshold"`
+	PrimaryOutcome PrimaryOutcome             `json:"primary_outcome,omitempty"`
+	OutcomeScores  map[HarmfulOutcome]float64 `json:"outcome_scores,omitempty"`
+	DetectorScores map[HarmfulOutcome]float64 `json:"detector_scores,omitempty"`
+	DetectorCounts map[HarmfulOutcome]int     `json:"detector_counts,omitempty"`
 }
 
 // ClassificationMetadata carries caller-provided request metadata alongside

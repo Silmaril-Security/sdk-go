@@ -27,7 +27,7 @@ type singleResponse struct {
 	Prediction     Prediction         `json:"prediction"`
 	Score          float64            `json:"score"`
 	Threshold      float64            `json:"threshold"`
-	PrimaryOutcome string             `json:"primary_outcome"`
+	PrimaryOutcome *string            `json:"primary_outcome"`
 	OutcomeScores  map[string]float64 `json:"outcome_scores"`
 	DetectorScores map[string]float64 `json:"detector_scores"`
 	DetectorCounts map[string]int     `json:"detector_counts"`
@@ -343,14 +343,34 @@ func blockResultFromResponse(resp singleResponse) (BlockResult, error) {
 	default:
 		return BlockResult{}, fmt.Errorf("firewall: invalid prediction %q", resp.Prediction)
 	}
+	var primary PrimaryOutcome
+	if resp.PrimaryOutcome != nil {
+		normalized, err := normalizePrimaryOutcome(*resp.PrimaryOutcome, "primary_outcome")
+		if err != nil {
+			return BlockResult{}, err
+		}
+		primary = normalized
+	}
+	outcomeScores, err := normalizeHarmfulOutcomeFloatMap(resp.OutcomeScores, "outcome_scores")
+	if err != nil {
+		return BlockResult{}, err
+	}
+	detectorScores, err := normalizeHarmfulOutcomeFloatMap(resp.DetectorScores, "detector_scores")
+	if err != nil {
+		return BlockResult{}, err
+	}
+	detectorCounts, err := normalizeHarmfulOutcomeIntMap(resp.DetectorCounts, "detector_counts")
+	if err != nil {
+		return BlockResult{}, err
+	}
 	return BlockResult{
 		Prediction:     resp.Prediction,
 		Score:          resp.Score,
 		Threshold:      resp.Threshold,
-		PrimaryOutcome: resp.PrimaryOutcome,
-		OutcomeScores:  resp.OutcomeScores,
-		DetectorScores: resp.DetectorScores,
-		DetectorCounts: resp.DetectorCounts,
+		PrimaryOutcome: primary,
+		OutcomeScores:  outcomeScores,
+		DetectorScores: detectorScores,
+		DetectorCounts: detectorCounts,
 	}, nil
 }
 
