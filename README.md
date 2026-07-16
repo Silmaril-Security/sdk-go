@@ -26,8 +26,8 @@ This SDK provides the low-level Go interface for that workflow:
 - Preserve hook and tool-name context for more accurate decisions.
 - Enforce backend-owned adaptive thresholds, with shadow mode for
   observation-only rollout.
-- Chunk long inputs consistently before they reach the API.
-- Send SDK metadata that lets the Firewall reconstruct chunked payloads.
+- Send each complete sanitized event in one request.
+- Preserve exact `metadata.conversationId` sequence identity and add one event ID.
 - Retry transient API Gateway and model-serving failures.
 
 ## Install
@@ -41,7 +41,7 @@ go get github.com/Silmaril-Security/sdk-go/firewall@latest
 For reproducible installs, pin a tagged release:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.4.1
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.5.0
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -134,7 +134,6 @@ type Options struct {
     APIKey           string               // required
     APIURL           string               // required
     Timeout          time.Duration        // default: 10s for the default HTTP client
-    ChunkConcurrency int                  // default: 8; long-input classify chunk fanout limit
     HTTPClient       *http.Client         // default: &http.Client{Timeout: Timeout}
     ShadowMode       bool                 // default: false; classify calls observe without blocking when true
     OnClassify       func(ClassifyEvent)  // optional telemetry callback for classification decisions
@@ -165,7 +164,7 @@ if err != nil {
     log.Fatal(err)
 }
 
-if result.Score < result.Threshold {
+if result.Prediction == firewall.PredictionBenign {
     continueNormally()
 } else {
     switch result.PrimaryOutcome {
@@ -203,15 +202,14 @@ the adaptive threshold schedule. The default backend config is
 opportunity uses `0.5`, 2 use about `0.6661`, 5 use about `0.8328`, and 10 or
 more are capped at `0.9`.
 
-The SDK no longer sends `threshold` in request payloads. It sends chunk
-metadata instead, and the backend combines tenant config, active batch size,
-and chunk count to decide the threshold. The applied value remains available on
+The SDK does not send `threshold` in request payloads. The backend owns the
+applied threshold, which remains available on
 `BlockResult.Threshold` and blocking error types as diagnostic metadata.
 
 ## Shadow Mode
 
-`Classify` and `ClassifyBatch` enforce thresholds by default. Shadow mode keeps
-the same classification and threshold logic but suppresses
+`Classify` and `ClassifyBatch` enforce backend predictions by default. Shadow
+mode keeps the same classification result but suppresses
 `FirewallBlockedError` and `BatchFirewallBlockedError`, so live traffic can continue
 while telemetry records what would have blocked:
 
@@ -255,7 +253,8 @@ _, err = fw.ClassifyBatch(ctx, texts,
 ```
 
 `ClassifyEvent` includes `Hook`, `ToolName`, `Text`, `Result`, `Blocked`, and
-`ShadowMode`. `Blocked` is computed from `Result.Score >= Result.Threshold`.
+`ShadowMode`. `Blocked` is true only when the backend returns
+`PredictionMalicious`.
 
 ## Hook labels
 
@@ -293,10 +292,9 @@ _, err := fw.Classify(ctx, text,
 
 The SDK preserves caller metadata and adds a reserved `metadata.silmaril`
 namespace to every request. SDK-controlled fields are `sdk_language`,
-`sdk_version`, `request_id`, `input_index`, `chunk_index`, and `chunk_count`.
-Single unchunked requests use `input_index=0`, `chunk_index=0`, and
-`chunk_count=1`; batches use one metadata object per input; chunked requests
-reuse a single request id across all chunks. If callers provide
+`sdk_version`, and `request_id`; batches additionally carry `input_index` for
+diagnostics and remain stateless. Exact `metadata.conversationId` is preserved
+as the backend sequence identity. No aliases are inspected. If callers provide
 `metadata["silmaril"]`, it must be an object and SDK-reserved keys are
 overwritten by the SDK.
 
@@ -328,18 +326,11 @@ as deprecated aliases for one release.
 
 All error types satisfy `error` and work with `errors.As`.
 
-## Chunking
+## Complete events
 
-Long inputs are chunked client-side into 400-token overlapping windows
-(64-token overlap). The maximum input is 81,920 tokens. For `Classify`, chunks
-are sent as bounded parallel single-text requests using `Options.ChunkConcurrency`
-(default: 8), letting the Firewall service distribute work across serving
-instances. The highest score is returned.
-
-Set `ChunkConcurrency: 1` to send chunk requests sequentially. `ClassifyBatch`
-continues to send independent texts as one batch request.
-
-`firewall.ChunkText` is exported if you need to chunk manually.
+`Classify` sanitizes invalid UTF-8 and sends the full logical event once. The
+backend owns token-window processing and sequence ordering. `ClassifyBatch`
+continues to send independent stateless texts as one batch request.
 
 ## Batch Classification
 

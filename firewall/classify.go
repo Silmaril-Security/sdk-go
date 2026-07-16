@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 )
 
 type singleRequestPayload struct {
@@ -37,9 +36,7 @@ type batchResponse struct {
 	Predictions []singleResponse `json:"predictions"`
 }
 
-// Classify classifies a single text. Long inputs are chunked client-side and
-// fanned out as bounded parallel single-text requests; the highest score across
-// chunks is returned.
+// Classify classifies one complete logical event in a single request.
 func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOption) (BlockResult, error) {
 	var cfg classifyConfig
 	for _, opt := range opts {
@@ -62,28 +59,11 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 }
 
 func (f *Firewall) classifyRaw(ctx context.Context, text string, cfg classifyConfig) (BlockResult, error) {
-	chunks, err := ChunkText(text)
-	if err != nil {
-		return BlockResult{}, err
-	}
-	if len(chunks) == 1 {
-		return f.classifySingleRaw(ctx, chunks[0], cfg, 0, 1)
-	}
-	results, err := f.classifyChunksRaw(ctx, chunks, cfg)
-	if err != nil {
-		return BlockResult{}, err
-	}
-	best := results[0]
-	for _, r := range results[1:] {
-		if r.Score > best.Score {
-			best = r
-		}
-	}
-	return best, nil
+	return f.classifySingleRaw(ctx, text, cfg)
 }
 
-func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg classifyConfig, chunkIndex int, chunkCount int) (BlockResult, error) {
-	metadata, err := sdkMetadata(cfg.metadata, cfg.requestID, 0, chunkIndex, chunkCount)
+func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg classifyConfig) (BlockResult, error) {
+	metadata, err := sdkMetadata(cfg.metadata, cfg.requestID, nil)
 	if err != nil {
 		return BlockResult{}, err
 	}
@@ -102,49 +82,6 @@ func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg class
 		return BlockResult{}, err
 	}
 	return blockResultFromResponse(resp)
-}
-
-func (f *Firewall) classifyChunksRaw(ctx context.Context, chunks []string, cfg classifyConfig) ([]BlockResult, error) {
-	workers := f.chunkConcurrency
-	if workers > len(chunks) {
-		workers = len(chunks)
-	}
-	results := make([]BlockResult, len(chunks))
-	jobs := make(chan int)
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var firstErr error
-
-	for i := 0; i < workers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for index := range jobs {
-				result, err := f.classifySingleRaw(ctx, chunks[index], cfg, index, len(chunks))
-				if err != nil {
-					mu.Lock()
-					if firstErr == nil {
-						firstErr = err
-					}
-					mu.Unlock()
-					continue
-				}
-				results[index] = result
-			}
-		}()
-	}
-
-	for i := range chunks {
-		jobs <- i
-	}
-	close(jobs)
-	wg.Wait()
-
-	if firstErr != nil {
-		return nil, firstErr
-	}
-	return results, nil
 }
 
 // ClassifyBatch classifies multiple independent texts in a single request.
@@ -238,7 +175,7 @@ func (f *Firewall) newClassifyEvent(text string, hook HookLabel, toolName string
 		ToolName:   toolName,
 		Text:       text,
 		Result:     result,
-		Blocked:    result.Score >= result.Threshold,
+		Blocked:    result.Prediction == PredictionMalicious,
 		ShadowMode: shadowMode,
 	}
 }
@@ -326,7 +263,7 @@ func batchMetadata(cfg batchClassifyConfig, length int) ([]*ClassificationMetada
 		if cfg.metadataSet && cfg.metadata[i] != nil {
 			item = &cfg.metadata[i]
 		}
-		metadata, err := sdkMetadata(item, cfg.requestID, i, 0, 1)
+		metadata, err := sdkMetadata(item, cfg.requestID, &i)
 		if err != nil {
 			return nil, err
 		}
@@ -338,8 +275,6 @@ func batchMetadata(cfg batchClassifyConfig, length int) ([]*ClassificationMetada
 func blockResultFromResponse(resp singleResponse) (BlockResult, error) {
 	switch resp.Prediction {
 	case PredictionBenign, PredictionMalicious:
-	case "":
-		resp.Prediction = predictionForScore(resp.Score, resp.Threshold)
 	default:
 		return BlockResult{}, fmt.Errorf("firewall: invalid prediction %q", resp.Prediction)
 	}
@@ -372,11 +307,4 @@ func blockResultFromResponse(resp singleResponse) (BlockResult, error) {
 		DetectorScores: detectorScores,
 		DetectorCounts: detectorCounts,
 	}, nil
-}
-
-func predictionForScore(score, threshold float64) Prediction {
-	if score >= threshold {
-		return PredictionMalicious
-	}
-	return PredictionBenign
 }

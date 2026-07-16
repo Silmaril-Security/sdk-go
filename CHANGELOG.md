@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v0.5.0
+
+- Sends every `Classify` input as one complete event without client chunking.
+- Preserves exact `metadata.conversationId` and emits one
+  `metadata.silmaril.request_id` per event.
+- Requires backend `prediction` for enforcement while preserving optional
+  outcome scores.
+
 ## v0.4.1
 
 - Adds typed firewall outcome constants, ordered outcome accessors,

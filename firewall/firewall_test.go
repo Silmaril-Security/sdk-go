@@ -29,9 +29,7 @@ func requireSilmarilMetadata(
 	t *testing.T,
 	metadata *ClassificationMetadata,
 	requestID string,
-	inputIndex int,
-	chunkIndex int,
-	chunkCount int,
+	inputIndex *int,
 ) map[string]any {
 	t.Helper()
 	if metadata == nil {
@@ -50,14 +48,18 @@ func requireSilmarilMetadata(
 	if raw["request_id"] != requestID {
 		t.Errorf("request_id = %v, want %s", raw["request_id"], requestID)
 	}
-	if got := int(raw["input_index"].(float64)); got != inputIndex {
-		t.Errorf("input_index = %d, want %d", got, inputIndex)
+	if inputIndex == nil {
+		if _, ok := raw["input_index"]; ok {
+			t.Error("input_index must be omitted for single events")
+		}
+	} else if got := int(raw["input_index"].(float64)); got != *inputIndex {
+		t.Errorf("input_index = %d, want %d", got, *inputIndex)
 	}
-	if got := int(raw["chunk_index"].(float64)); got != chunkIndex {
-		t.Errorf("chunk_index = %d, want %d", got, chunkIndex)
+	if _, ok := raw["chunk_index"]; ok {
+		t.Error("chunk_index must be omitted")
 	}
-	if got := int(raw["chunk_count"].(float64)); got != chunkCount {
-		t.Errorf("chunk_count = %d, want %d", got, chunkCount)
+	if _, ok := raw["chunk_count"]; ok {
+		t.Error("chunk_count must be omitted")
 	}
 	return raw
 }
@@ -98,37 +100,6 @@ func TestNewDefaults(t *testing.T) {
 	}
 	if fw.shadowMode {
 		t.Error("shadowMode = true, want false")
-	}
-	if fw.chunkConcurrency != DefaultChunkConcurrency {
-		t.Errorf("chunkConcurrency = %d, want %d", fw.chunkConcurrency, DefaultChunkConcurrency)
-	}
-}
-
-func TestNewHonorsChunkConcurrency(t *testing.T) {
-	fw, err := New(Options{
-		APIKey:           "sk",
-		APIURL:           "https://example.com",
-		ChunkConcurrency: 3,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fw.chunkConcurrency != 3 {
-		t.Errorf("chunkConcurrency = %d, want 3", fw.chunkConcurrency)
-	}
-}
-
-func TestNewRejectsNegativeChunkConcurrency(t *testing.T) {
-	_, err := New(Options{
-		APIKey:           "sk",
-		APIURL:           "https://example.com",
-		ChunkConcurrency: -1,
-	})
-	if err == nil {
-		t.Fatal("expected error for negative ChunkConcurrency")
-	}
-	if !strings.Contains(err.Error(), "ChunkConcurrency must be non-negative") {
-		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -245,7 +216,7 @@ func TestClassifySingleHappyPath(t *testing.T) {
 	if gotPayload.Text != "hello" || gotPayload.Hook != HookUserInput || gotPayload.ToolName != "cal" {
 		t.Errorf("payload = %+v", gotPayload)
 	}
-	requireSilmarilMetadata(t, gotPayload.Metadata, "req-single", 0, 0, 1)
+	requireSilmarilMetadata(t, gotPayload.Metadata, "req-single", nil)
 }
 
 func TestClassifySanitizesInvalidUTF8Payload(t *testing.T) {
@@ -349,7 +320,7 @@ func TestClassifySerializesMetadata(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	requireSilmarilMetadata(t, gotPayload.Metadata, "req-meta", 0, 0, 1)
+	requireSilmarilMetadata(t, gotPayload.Metadata, "req-meta", nil)
 	if !reflect.DeepEqual((*gotPayload.Metadata)["langgraph"], metadata["langgraph"]) {
 		t.Fatalf("langgraph metadata = %#v, want %#v", (*gotPayload.Metadata)["langgraph"], metadata["langgraph"])
 	}
@@ -393,8 +364,9 @@ func TestClassifyBatchHappyPath(t *testing.T) {
 	if len(gotPayload.Metadata) != 2 {
 		t.Fatalf("metadata length = %d, want 2", len(gotPayload.Metadata))
 	}
-	requireSilmarilMetadata(t, gotPayload.Metadata[0], "req-batch", 0, 0, 1)
-	requireSilmarilMetadata(t, gotPayload.Metadata[1], "req-batch", 1, 0, 1)
+	index0, index1 := 0, 1
+	requireSilmarilMetadata(t, gotPayload.Metadata[0], "req-batch", &index0)
+	requireSilmarilMetadata(t, gotPayload.Metadata[1], "req-batch", &index1)
 }
 
 func TestClassifyBatchSerializesMetadata(t *testing.T) {
@@ -426,11 +398,12 @@ func TestClassifyBatchSerializesMetadata(t *testing.T) {
 	if len(gotPayload.Metadata) != 2 {
 		t.Fatalf("metadata length = %d, want 2", len(gotPayload.Metadata))
 	}
-	requireSilmarilMetadata(t, gotPayload.Metadata[0], "req-batch-meta", 0, 0, 1)
+	index0, index1 := 0, 1
+	requireSilmarilMetadata(t, gotPayload.Metadata[0], "req-batch-meta", &index0)
 	if !reflect.DeepEqual((*gotPayload.Metadata[0])["langgraph"], metadata[0]["langgraph"]) {
 		t.Fatalf("metadata[0] langgraph = %#v, want %#v", (*gotPayload.Metadata[0])["langgraph"], metadata[0]["langgraph"])
 	}
-	requireSilmarilMetadata(t, gotPayload.Metadata[1], "req-batch-meta", 1, 0, 1)
+	requireSilmarilMetadata(t, gotPayload.Metadata[1], "req-batch-meta", &index1)
 }
 
 func TestClassifyBatchDoesNotSendThresholds(t *testing.T) {
@@ -568,6 +541,19 @@ func TestClassifyTrustsServerPrediction(t *testing.T) {
 	}
 	if result.Prediction != PredictionBenign {
 		t.Errorf("prediction = %q, want BENIGN", result.Prediction)
+	}
+}
+
+func TestClassifyRequiresBackendPrediction(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(singleResponse{Score: 0.99, Threshold: 0.5})
+	}))
+	defer ts.Close()
+
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
+	_, err := fw.Classify(context.Background(), "missing prediction")
+	if err == nil || !strings.Contains(err.Error(), "invalid prediction") {
+		t.Fatalf("error = %v, want invalid prediction", err)
 	}
 }
 
@@ -935,7 +921,7 @@ func TestClassifyContextCancellation(t *testing.T) {
 	}
 }
 
-func TestClassifyChunksLongInputAndPicksMaxScore(t *testing.T) {
+func TestClassifySendsLongInputOnce(t *testing.T) {
 	var calls atomic.Int32
 	var mu sync.Mutex
 	var received []singleRequestPayload
@@ -959,16 +945,16 @@ func TestClassifyChunksLongInputAndPicksMaxScore(t *testing.T) {
 	defer ts.Close()
 
 	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
-	long := strings.Repeat("a", ChunkWindowChars*3)
+	long := strings.Repeat("a", 4001)
 	res, err := fw.Classify(context.Background(), long, WithHook(HookUserInput))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Prediction != PredictionMalicious || res.Score != 0.95 {
+	if res.Prediction != PredictionBenign || res.Score != 0.1 {
 		t.Errorf("result = %+v", res)
 	}
-	if len(received) < 2 {
-		t.Errorf("expected multiple chunk requests, got %d", len(received))
+	if len(received) != 1 {
+		t.Errorf("expected one complete event request, got %d", len(received))
 	}
 	for _, payload := range received {
 		if payload.Hook != HookUserInput {
@@ -978,12 +964,12 @@ func TestClassifyChunksLongInputAndPicksMaxScore(t *testing.T) {
 			t.Error("chunk text is empty")
 		}
 	}
-	if got := calls.Load(); got < 2 {
-		t.Errorf("HTTP calls = %d, want multiple single requests", got)
+	if got := calls.Load(); got != 1 {
+		t.Errorf("HTTP calls = %d, want 1", got)
 	}
 }
 
-func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
+func TestClassifyLongInputPreservesToolAndMetadata(t *testing.T) {
 	var mu sync.Mutex
 	var received []singleRequestPayload
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -999,22 +985,20 @@ func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
 	defer ts.Close()
 
 	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
-	long := strings.Repeat("b", ChunkWindowChars*2)
+	long := strings.Repeat("b", 4001)
 	_, err := fw.Classify(
 		context.Background(),
 		long,
 		WithHook(HookToolResponse),
 		WithToolName("fetch_webpage"),
-		WithMetadata(ClassificationMetadata{"langgraph": map[string]any{"run_id": "run-chunked"}}),
+		WithMetadata(ClassificationMetadata{"conversationId": "conversation-123", "conversation_id": "inert"}),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(received) < 2 {
-		t.Fatalf("expected multiple chunk requests, got %d", len(received))
+	if len(received) != 1 {
+		t.Fatalf("expected one complete event request, got %d", len(received))
 	}
-	seenChunkIndexes := map[int]bool{}
-	var requestID string
 	for i, payload := range received {
 		if payload.Hook != HookToolResponse {
 			t.Errorf("hook[%d] = %q, want %q", i, payload.Hook, HookToolResponse)
@@ -1025,23 +1009,11 @@ func TestClassifyChunksLongInputPropagatesToolNameToEveryChunk(t *testing.T) {
 		if payload.Metadata == nil {
 			t.Fatalf("metadata[%d] was not serialized", i)
 		}
-		if got := (*payload.Metadata)["langgraph"].(map[string]any)["run_id"]; got != "run-chunked" {
-			t.Errorf("metadata[%d] run_id = %v, want run-chunked", i, got)
+		if got := (*payload.Metadata)["conversationId"]; got != "conversation-123" {
+			t.Errorf("metadata[%d] conversationId = %v", i, got)
 		}
 		silmaril := (*payload.Metadata)["silmaril"].(map[string]any)
-		raw := requireSilmarilMetadata(t, payload.Metadata, silmaril["request_id"].(string), 0, int(silmaril["chunk_index"].(float64)), len(received))
-		if requestID == "" {
-			requestID = raw["request_id"].(string)
-		}
-		if raw["request_id"] != requestID {
-			t.Errorf("metadata[%d] request_id = %v, want %s", i, raw["request_id"], requestID)
-		}
-		seenChunkIndexes[int(raw["chunk_index"].(float64))] = true
-	}
-	for i := range received {
-		if !seenChunkIndexes[i] {
-			t.Errorf("missing chunk_index %d in metadata", i)
-		}
+		requireSilmarilMetadata(t, payload.Metadata, silmaril["request_id"].(string), nil)
 	}
 }
 
@@ -1057,21 +1029,21 @@ func TestClassifyLongInputPropagatesChunkError(t *testing.T) {
 	defer ts.Close()
 
 	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
-	long := strings.Repeat("a", ChunkWindowChars*3)
+	long := strings.Repeat("a", 4001)
 	_, err := fw.Classify(context.Background(), long)
 	if err == nil {
-		t.Fatal("expected chunk error")
+		t.Fatal("expected request error")
 	}
 	var apiErr *APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("error is not APIError: %T %v", err, err)
 	}
-	if calls.Load() < 2 {
-		t.Fatalf("HTTP calls = %d, want multiple chunk attempts", calls.Load())
+	if calls.Load() != 1 {
+		t.Fatalf("HTTP calls = %d, want 1", calls.Load())
 	}
 }
 
-func TestClassifyChunkConcurrencyLimit(t *testing.T) {
+func TestClassifyLongInputUsesOneHTTPCall(t *testing.T) {
 	var active atomic.Int32
 	var maxActive atomic.Int32
 	var calls atomic.Int32
@@ -1090,15 +1062,15 @@ func TestClassifyChunkConcurrencyLimit(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ChunkConcurrency: 2, ShadowMode: true})
-	long := strings.Repeat("a", ChunkWindowChars*5)
+	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
+	long := strings.Repeat("a", 8000)
 	if _, err := fw.Classify(context.Background(), long); err != nil {
 		t.Fatal(err)
 	}
-	if calls.Load() <= 2 {
-		t.Fatalf("HTTP calls = %d, want more than 2", calls.Load())
+	if calls.Load() != 1 {
+		t.Fatalf("HTTP calls = %d, want 1", calls.Load())
 	}
-	if maxActive.Load() > 2 {
-		t.Fatalf("max active requests = %d, want <= 2", maxActive.Load())
+	if maxActive.Load() != 1 {
+		t.Fatalf("max active requests = %d, want 1", maxActive.Load())
 	}
 }

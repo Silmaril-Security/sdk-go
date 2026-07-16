@@ -177,10 +177,9 @@ func TestClassifyPerCallShadowModeCanEnforce(t *testing.T) {
 	}
 }
 
-func TestClassifyLongInputBlocksOnceUsingHighestScore(t *testing.T) {
+func TestClassifyLongInputEnforcesOneBackendPrediction(t *testing.T) {
 	var mu sync.Mutex
 	var received []singleRequestPayload
-	var calls int
 	var events []ClassifyEvent
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload singleRequestPayload
@@ -188,15 +187,9 @@ func TestClassifyLongInputBlocksOnceUsingHighestScore(t *testing.T) {
 			t.Fatal(err)
 		}
 		mu.Lock()
-		calls++
-		callNumber := calls
 		received = append(received, payload)
 		mu.Unlock()
-		if callNumber == 2 {
-			_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionMalicious, Score: 0.95, Threshold: 0.5})
-			return
-		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionMalicious, Score: 0.1, Threshold: 0.5})
 	}))
 	defer ts.Close()
 
@@ -211,25 +204,25 @@ func TestClassifyLongInputBlocksOnceUsingHighestScore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	text := strings.Repeat("a", ChunkWindowChars*2)
+	text := strings.Repeat("a", 4001)
 	result, err := fw.Classify(context.Background(), text, WithHook(HookUserInput))
 	if err == nil {
 		t.Fatal("expected firewall blocked error")
 	}
-	if result.Score != 0.95 {
+	if result.Score != 0.1 {
 		t.Errorf("result = %+v", result)
 	}
 	var blockedErr *FirewallBlockedError
 	if !errors.As(err, &blockedErr) {
 		t.Fatalf("error is not *FirewallBlockedError: %T", err)
 	}
-	if len(received) < 2 {
-		t.Fatalf("expected chunked single requests, got %d chunks", len(received))
+	if len(received) != 1 {
+		t.Fatalf("expected one complete event request, got %d", len(received))
 	}
 	if len(events) != 1 {
 		t.Fatalf("events = %d, want 1", len(events))
 	}
-	if events[0].Text != text || events[0].Result.Score != 0.95 {
+	if events[0].Text != text || events[0].Result.Score != 0.1 {
 		t.Errorf("event = %+v", events[0])
 	}
 }

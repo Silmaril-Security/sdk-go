@@ -21,7 +21,7 @@ go mod tidy
   Do not add runnable samples, demos, notebooks, tenant-specific examples, or
   live-service walkthroughs to this public repo unless explicitly requested.
 - Keep `Classify` and `ClassifyBatch` as the public classification APIs.
-- Long inputs must be chunked client-side with the same constants as the Python
-  and TypeScript SDKs.
+- Send each complete sanitized logical event in one request; the Firewall
+  backend owns token-window processing and sequence ordering.
 - Do not commit API keys, tenant-specific benchmark notebooks, or deployment
   credentials.

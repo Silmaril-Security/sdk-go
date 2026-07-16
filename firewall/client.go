@@ -12,9 +12,6 @@ import (
 const (
 	defaultMaxRetries = 5
 	defaultTimeout    = 10 * time.Second
-	// DefaultChunkConcurrency is the bounded fanout used for long-input
-	// Classify chunks when Options.ChunkConcurrency is zero.
-	DefaultChunkConcurrency = 8
 )
 
 // Firewall is a client for the Silmaril Firewall /classify endpoint.
@@ -25,7 +22,6 @@ type Firewall struct {
 	httpClient       *http.Client
 	shadowMode       bool
 	onClassify       func(ClassifyEvent)
-	chunkConcurrency int
 	maxRetries       int
 	retryBaseBackoff time.Duration
 	retryMaxBackoff  time.Duration
@@ -40,13 +36,6 @@ func New(opts Options) (*Firewall, error) {
 	}
 	if opts.APIURL == "" {
 		return nil, errors.New("firewall: APIURL is required")
-	}
-	chunkConcurrency := opts.ChunkConcurrency
-	if chunkConcurrency < 0 {
-		return nil, fmt.Errorf("firewall: ChunkConcurrency must be non-negative, got %d", chunkConcurrency)
-	}
-	if chunkConcurrency == 0 {
-		chunkConcurrency = DefaultChunkConcurrency
 	}
 	timeout := opts.Timeout
 	if timeout < 0 {
@@ -74,7 +63,6 @@ func New(opts Options) (*Firewall, error) {
 		httpClient:       httpClient,
 		shadowMode:       opts.ShadowMode,
 		onClassify:       opts.OnClassify,
-		chunkConcurrency: chunkConcurrency,
 		maxRetries:       defaultMaxRetries,
 		retryBaseBackoff: time.Second,
 		retryMaxBackoff:  30 * time.Second,
