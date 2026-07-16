@@ -46,7 +46,7 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 		cfg.requestID = newRequestID()
 	}
 	text = sanitizeText(text)
-	result, err := f.classifyRaw(ctx, text, cfg)
+	result, err := f.classifySingleRaw(ctx, text, cfg)
 	if err != nil {
 		return BlockResult{}, err
 	}
@@ -56,10 +56,6 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 		return result, firewallBlockedErrorFromEvent(event)
 	}
 	return result, nil
-}
-
-func (f *Firewall) classifyRaw(ctx context.Context, text string, cfg classifyConfig) (BlockResult, error) {
-	return f.classifySingleRaw(ctx, text, cfg)
 }
 
 func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg classifyConfig) (BlockResult, error) {
@@ -121,7 +117,6 @@ func (f *Firewall) ClassifyBatch(ctx context.Context, texts []string, opts ...Ba
 }
 
 func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg batchClassifyConfig) ([]BlockResult, error) {
-	texts = sanitizeTexts(texts)
 	if len(texts) == 0 {
 		return nil, errors.New("firewall: texts must not be empty")
 	}

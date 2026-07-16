@@ -52,7 +52,11 @@ func requireSilmarilMetadata(
 		if _, ok := raw["input_index"]; ok {
 			t.Error("input_index must be omitted for single events")
 		}
-	} else if got := int(raw["input_index"].(float64)); got != *inputIndex {
+	} else if value, ok := raw["input_index"]; !ok {
+		t.Errorf("input_index missing, want %d", *inputIndex)
+	} else if number, ok := value.(float64); !ok {
+		t.Errorf("input_index = %#v, want numeric %d", value, *inputIndex)
+	} else if got := int(number); got != *inputIndex {
 		t.Errorf("input_index = %d, want %d", got, *inputIndex)
 	}
 	if _, ok := raw["chunk_index"]; ok {
