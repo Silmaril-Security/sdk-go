@@ -10,6 +10,6 @@
 // mode to observe decisions without interrupting traffic.
 //
 // The package is dependency-free outside the Go standard library. Long inputs
-// are chunked client-side, and SDK metadata is attached to requests so the
-// backend can reconstruct batches and chunks when applying tenant policy.
+// are sent as complete logical events, and SDK metadata carries one event ID
+// while the backend owns sequence ordering and token-window processing.
 package firewall

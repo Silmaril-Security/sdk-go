@@ -9,7 +9,7 @@ import (
 )
 
 // SDKVersion is the semantic version reported in metadata.silmaril.
-const SDKVersion = "0.4.1"
+const SDKVersion = "0.5.0"
 
 func newRequestID() string {
 	var b [16]byte
@@ -31,9 +31,7 @@ func newRequestID() string {
 func sdkMetadata(
 	metadata *ClassificationMetadata,
 	requestID string,
-	inputIndex int,
-	chunkIndex int,
-	chunkCount int,
+	inputIndex *int,
 ) (*ClassificationMetadata, error) {
 	out := ClassificationMetadata{}
 	if metadata != nil {
@@ -60,9 +58,9 @@ func sdkMetadata(
 	namespace["sdk_language"] = "go"
 	namespace["sdk_version"] = SDKVersion
 	namespace["request_id"] = requestID
-	namespace["input_index"] = inputIndex
-	namespace["chunk_index"] = chunkIndex
-	namespace["chunk_count"] = chunkCount
+	if inputIndex != nil {
+		namespace["input_index"] = *inputIndex
+	}
 	out["silmaril"] = namespace
 	return &out, nil
 }

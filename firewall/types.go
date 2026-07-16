@@ -35,16 +35,13 @@ type ClassificationMetadata map[string]any
 // is set, Timeout is applied only when explicitly non-zero, by cloning the
 // provided client. The SDK also installs a no-redirect policy on cloned clients
 // whose CheckRedirect is nil; caller-provided redirect policies are preserved.
-// ChunkConcurrency limits long-input Classify fanout; zero uses
-// DefaultChunkConcurrency.
 type Options struct {
-	APIKey           string
-	APIURL           string
-	Timeout          time.Duration
-	ChunkConcurrency int
-	HTTPClient       *http.Client
-	ShadowMode       bool
-	OnClassify       func(ClassifyEvent)
+	APIKey     string
+	APIURL     string
+	Timeout    time.Duration
+	HTTPClient *http.Client
+	ShadowMode bool
+	OnClassify func(ClassifyEvent)
 }
 
 type classifyConfig struct {
