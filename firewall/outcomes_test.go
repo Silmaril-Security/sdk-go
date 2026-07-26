@@ -19,6 +19,12 @@ func TestOutcomeTaxonomyExportsOrderedValues(t *testing.T) {
 		OutcomeControlAbuse,
 		OutcomeSystemCompromise,
 		OutcomeServiceDisruption,
+		OutcomeCodeGeneration,
+		OutcomeStoryScriptGeneration,
+		OutcomeGameGeneration,
+		OutcomeWebsiteGeneration,
+		OutcomeClickUpTermsViolation,
+		OutcomeTraditionalAIAbuse,
 	}
 	primaryOutcomes := PrimaryOutcomes()
 	descriptions := OutcomeDescriptions()
