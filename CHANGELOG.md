@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.5.1
+
+- Adds typed support for `code_generation`, `story_script_generation`,
+  `game_generation`, `website_generation`, `clickup_terms_violation`, and
+  `traditional_ai_abuse`.
+- Extends ordered outcome collections, descriptions, validators, normalization
+  fixtures, exports, and documentation without changing the `/classify` wire
+  shape.
+
 ## v0.5.0
 
 - Sends every `Classify` input as one complete event without client chunking.

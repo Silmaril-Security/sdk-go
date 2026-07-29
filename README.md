@@ -178,6 +178,13 @@ if result.Prediction == firewall.PredictionBenign {
         blockAndEscalate(result)
     case firewall.OutcomeServiceDisruption:
         blockDisruptiveAction(result)
+    case firewall.OutcomeCodeGeneration,
+        firewall.OutcomeStoryScriptGeneration,
+        firewall.OutcomeGameGeneration,
+        firewall.OutcomeWebsiteGeneration,
+        firewall.OutcomeClickUpTermsViolation,
+        firewall.OutcomeTraditionalAIAbuse:
+        applyTenantPolicy(result)
     default:
         blockByDefault(result)
     }
@@ -192,6 +199,12 @@ Outcome taxonomy:
 - `control_abuse`: misuse of authorized tools or user privileges to send, change, approve, delete, operate, or bypass policy/RBAC without a stronger outcome.
 - `system_compromise`: privilege escalation, account takeover, hostile integration/plugin takeover, persistence, lateral movement, attacker webhook registration, or code/plugin execution.
 - `service_disruption`: downtime, lockout, degradation, alert suppression, destructive loops, resource exhaustion, cost spikes, or hidden outage evidence.
+- `code_generation`: generation or material modification of executable code, scripts, workflows, or configuration.
+- `story_script_generation`: generation of narrative prose, dialogue, scripts, or story artifacts.
+- `game_generation`: generation of a game, quest, level, mechanic, or playable experience.
+- `website_generation`: generation of a website, landing page, storefront, or web experience.
+- `clickup_terms_violation`: content or actions that violate the configured ClickUp tenant policy.
+- `traditional_ai_abuse`: unsafe AI assistance outside the concrete security outcome classes.
 
 ## Backend Thresholding
 
