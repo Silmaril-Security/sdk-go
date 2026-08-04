@@ -17,6 +17,12 @@ const (
 	OutcomeControlAbuse          PrimaryOutcome = "control_abuse"
 	OutcomeSystemCompromise      PrimaryOutcome = "system_compromise"
 	OutcomeServiceDisruption     PrimaryOutcome = "service_disruption"
+	OutcomeCodeGeneration        PrimaryOutcome = "code_generation"
+	OutcomeStoryScriptGeneration PrimaryOutcome = "story_script_generation"
+	OutcomeGameGeneration        PrimaryOutcome = "game_generation"
+	OutcomeWebsiteGeneration     PrimaryOutcome = "website_generation"
+	OutcomeClickUpTermsViolation PrimaryOutcome = "clickup_terms_violation"
+	OutcomeTraditionalAIAbuse    PrimaryOutcome = "traditional_ai_abuse"
 )
 
 const (
@@ -25,6 +31,12 @@ const (
 	HarmfulOutcomeControlAbuse          HarmfulOutcome = "control_abuse"
 	HarmfulOutcomeSystemCompromise      HarmfulOutcome = "system_compromise"
 	HarmfulOutcomeServiceDisruption     HarmfulOutcome = "service_disruption"
+	HarmfulOutcomeCodeGeneration        HarmfulOutcome = "code_generation"
+	HarmfulOutcomeStoryScriptGeneration HarmfulOutcome = "story_script_generation"
+	HarmfulOutcomeGameGeneration        HarmfulOutcome = "game_generation"
+	HarmfulOutcomeWebsiteGeneration     HarmfulOutcome = "website_generation"
+	HarmfulOutcomeClickUpTermsViolation HarmfulOutcome = "clickup_terms_violation"
+	HarmfulOutcomeTraditionalAIAbuse    HarmfulOutcome = "traditional_ai_abuse"
 )
 
 var primaryOutcomes = []PrimaryOutcome{
@@ -34,6 +46,12 @@ var primaryOutcomes = []PrimaryOutcome{
 	OutcomeControlAbuse,
 	OutcomeSystemCompromise,
 	OutcomeServiceDisruption,
+	OutcomeCodeGeneration,
+	OutcomeStoryScriptGeneration,
+	OutcomeGameGeneration,
+	OutcomeWebsiteGeneration,
+	OutcomeClickUpTermsViolation,
+	OutcomeTraditionalAIAbuse,
 }
 
 var harmfulOutcomes = []HarmfulOutcome{
@@ -42,6 +60,12 @@ var harmfulOutcomes = []HarmfulOutcome{
 	HarmfulOutcomeControlAbuse,
 	HarmfulOutcomeSystemCompromise,
 	HarmfulOutcomeServiceDisruption,
+	HarmfulOutcomeCodeGeneration,
+	HarmfulOutcomeStoryScriptGeneration,
+	HarmfulOutcomeGameGeneration,
+	HarmfulOutcomeWebsiteGeneration,
+	HarmfulOutcomeClickUpTermsViolation,
+	HarmfulOutcomeTraditionalAIAbuse,
 }
 
 var outcomeDescriptions = map[PrimaryOutcome]string{
@@ -51,6 +75,12 @@ var outcomeDescriptions = map[PrimaryOutcome]string{
 	OutcomeControlAbuse:          "Misuses authorized tools or user privileges to send, change, approve, delete, operate, or bypass policy/RBAC without a stronger outcome.",
 	OutcomeSystemCompromise:      "Enables privilege escalation, account takeover, hostile integration or plugin takeover, persistence, lateral movement, attacker webhook registration, or code/plugin execution.",
 	OutcomeServiceDisruption:     "Causes downtime, lockout, degradation, alert suppression, destructive loops, resource exhaustion, cost spikes, or hidden outage evidence.",
+	OutcomeCodeGeneration:        "Requests generation or material modification of executable code, scripts, workflows, or configuration.",
+	OutcomeStoryScriptGeneration: "Requests generation of narrative prose, dialogue, scripts, or story artifacts.",
+	OutcomeGameGeneration:        "Requests generation of a game, quest, level, mechanic, or playable experience.",
+	OutcomeWebsiteGeneration:     "Requests generation of a website, landing page, storefront, or web experience.",
+	OutcomeClickUpTermsViolation: "Requests content or actions that violate the configured ClickUp tenant policy.",
+	OutcomeTraditionalAIAbuse:    "Requests unsafe AI assistance outside the concrete security outcome classes.",
 }
 
 // PrimaryOutcomes returns the ordered public primary-outcome taxonomy.
@@ -79,6 +109,12 @@ var primaryOutcomeSet = map[PrimaryOutcome]struct{}{
 	OutcomeControlAbuse:          {},
 	OutcomeSystemCompromise:      {},
 	OutcomeServiceDisruption:     {},
+	OutcomeCodeGeneration:        {},
+	OutcomeStoryScriptGeneration: {},
+	OutcomeGameGeneration:        {},
+	OutcomeWebsiteGeneration:     {},
+	OutcomeClickUpTermsViolation: {},
+	OutcomeTraditionalAIAbuse:    {},
 }
 
 var harmfulOutcomeSet = map[HarmfulOutcome]struct{}{
@@ -87,6 +123,12 @@ var harmfulOutcomeSet = map[HarmfulOutcome]struct{}{
 	HarmfulOutcomeControlAbuse:          {},
 	HarmfulOutcomeSystemCompromise:      {},
 	HarmfulOutcomeServiceDisruption:     {},
+	HarmfulOutcomeCodeGeneration:        {},
+	HarmfulOutcomeStoryScriptGeneration: {},
+	HarmfulOutcomeGameGeneration:        {},
+	HarmfulOutcomeWebsiteGeneration:     {},
+	HarmfulOutcomeClickUpTermsViolation: {},
+	HarmfulOutcomeTraditionalAIAbuse:    {},
 }
 
 // IsPrimaryOutcome reports whether value is a canonical primary outcome.
