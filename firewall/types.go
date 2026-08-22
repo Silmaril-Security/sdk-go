@@ -26,10 +26,11 @@ const (
 
 // BlockResult is the output of a single classification call.
 type BlockResult struct {
-	Prediction     Prediction                 `json:"prediction"`
-	Score          float64                    `json:"score"`
-	Threshold      float64                    `json:"threshold"`
-	Mode           FirewallMode               `json:"mode"`
+	Prediction Prediction `json:"prediction"`
+	Score      float64    `json:"score"`
+	Threshold  float64    `json:"threshold"`
+	// Mode is empty only when a legacy backend omitted mode and no override was requested.
+	Mode           FirewallMode               `json:"mode,omitempty"`
 	PrimaryOutcome PrimaryOutcome             `json:"primary_outcome,omitempty"`
 	OutcomeScores  map[HarmfulOutcome]float64 `json:"outcome_scores,omitempty"`
 	DetectorScores map[HarmfulOutcome]float64 `json:"detector_scores,omitempty"`

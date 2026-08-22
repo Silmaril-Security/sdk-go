@@ -145,6 +145,8 @@ type Options struct {
 and effective mode. When `Mode` is omitted, the backend controls the mode. A
 malicious result returns a typed blocking error only when the effective mode is
 `firewall.ModeBlock`; `ModeShadow` and `ModeWarn` return the result unchanged.
+A legacy mode-less response leaves `BlockResult.Mode` empty when no override
+was requested; direct SDK calls retain their pre-0.6 Block default internally.
 
 When `HTTPClient` is provided, the SDK clones it without mutating your original
 client. Its timeout is preserved unless `Options.Timeout` is explicitly
@@ -226,11 +228,14 @@ applied threshold, which remains available on
 Use `ModeShadow`, `ModeWarn`, or `ModeBlock` only when a request needs to
 override the backend-configured mode. Shadow and Warn preserve the caller's
 flow; Block returns `FirewallBlockedError` or `BatchFirewallBlockedError` for a
-malicious decision. The SDK returns the effective mode in `BlockResult.Mode`:
+malicious decision. Current backends return the effective mode in
+`BlockResult.Mode`.
 
-During a rolling upgrade, a successful response from a pre-0.6 backend that
-omits `mode` retains the legacy SDK behavior and is treated as Block. Current
-backends return the effective mode, including backend-controlled Shadow or Warn.
+During a rolling upgrade, an explicit request mode remains authoritative if a
+legacy or mixed-version backend omits or disagrees about `mode`. When both the
+request and response omit it, `BlockResult.Mode` remains empty; integrations
+can retain their pre-0.6 behavior without falsely reporting a backend Block
+mode. Direct SDK enforcement retains its pre-0.6 Block default.
 
 ```go
 fw, err := firewall.New(firewall.Options{

@@ -183,14 +183,20 @@ func (f *Firewall) newClassifyEvent(text string, hook HookLabel, toolName string
 	if hook == "" {
 		hook = HookUnknown
 	}
+	effectiveMode := result.Mode
+	if effectiveMode == "" {
+		// Preserve the pre-0.6 direct-SDK default without claiming that a
+		// mode-less legacy response was a backend Block decision.
+		effectiveMode = ModeBlock
+	}
 	return ClassifyEvent{
 		Hook:       hook,
 		ToolName:   toolName,
 		Text:       text,
 		Result:     result,
 		Blocked:    result.Prediction == PredictionMalicious,
-		Mode:       result.Mode,
-		ShadowMode: result.Mode == ModeShadow,
+		Mode:       effectiveMode,
+		ShadowMode: effectiveMode == ModeShadow,
 	}
 }
 
@@ -308,21 +314,23 @@ func batchMetadata(cfg batchClassifyConfig, length int) ([]*ClassificationMetada
 	return out, nil
 }
 
-func blockResultFromResponse(resp singleResponse, fallbackMode ...FirewallMode) (BlockResult, error) {
+func blockResultFromResponse(resp singleResponse, requestedMode ...FirewallMode) (BlockResult, error) {
 	switch resp.Prediction {
 	case PredictionBenign, PredictionMalicious:
 	default:
 		return BlockResult{}, fmt.Errorf("firewall: invalid prediction %q", resp.Prediction)
 	}
+	if resp.Mode != "" {
+		if err := validateMode(resp.Mode); err != nil {
+			return BlockResult{}, fmt.Errorf("firewall: invalid backend mode %q", resp.Mode)
+		}
+	}
 	mode := resp.Mode
-	if mode == "" && len(fallbackMode) > 0 && fallbackMode[0] != "" {
-		mode = fallbackMode[0]
-	}
-	if mode == "" {
-		mode = ModeBlock
-	}
-	if err := validateMode(mode); err != nil {
-		return BlockResult{}, fmt.Errorf("firewall: invalid backend mode %q", mode)
+	if len(requestedMode) > 0 && requestedMode[0] != "" {
+		// A supplied mode is the per-request override contract. Prefer it
+		// during rolling upgrades so a missing or stale response field cannot
+		// strengthen enforcement beyond what the caller requested.
+		mode = requestedMode[0]
 	}
 	var primary PrimaryOutcome
 	if resp.PrimaryOutcome != nil {

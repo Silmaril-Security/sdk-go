@@ -95,11 +95,36 @@ func TestClassifyExplicitModePrecedesLegacyShadowMode(t *testing.T) {
 		WithShadowMode(true),
 		WithMode(ModeBlock),
 	)
-	if err != nil {
-		t.Fatalf("backend effective shadow mode must preserve the call: %v", err)
+	var blockedErr *FirewallBlockedError
+	if !errors.As(err, &blockedErr) {
+		t.Fatalf("error = %v, want FirewallBlockedError", err)
 	}
 	if received.Mode != ModeBlock {
 		t.Fatalf("request mode = %q, want block", received.Mode)
+	}
+	if result.Mode != ModeBlock {
+		t.Fatalf("effective mode = %q, want block", result.Mode)
+	}
+}
+
+func TestClassifyExplicitShadowCannotBeEscalatedByMixedBackend(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(singleResponse{
+			Prediction: PredictionMalicious,
+			Score:      0.9,
+			Threshold:  0.5,
+			Mode:       ModeBlock,
+		})
+	}))
+	defer ts.Close()
+
+	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL, Mode: ModeShadow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fw.Classify(context.Background(), "attack")
+	if err != nil {
+		t.Fatalf("shadow override must preserve the call: %v", err)
 	}
 	if result.Mode != ModeShadow {
 		t.Fatalf("effective mode = %q, want shadow", result.Mode)
@@ -126,7 +151,7 @@ func TestClassifyRejectsInvalidBackendMode(t *testing.T) {
 	}
 }
 
-func TestClassifyLegacyModeLessResponseDefaultsToBlock(t *testing.T) {
+func TestClassifyLegacyModeLessResponsePreservesDefaultEnforcement(t *testing.T) {
 	var received singleRequestPayload
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
@@ -152,12 +177,12 @@ func TestClassifyLegacyModeLessResponseDefaultsToBlock(t *testing.T) {
 	if received.Mode != "" {
 		t.Fatalf("request mode = %q, want omitted", received.Mode)
 	}
-	if result.Mode != ModeBlock {
-		t.Fatalf("result mode = %q, want block", result.Mode)
+	if result.Mode != "" {
+		t.Fatalf("result mode = %q, want unknown legacy mode", result.Mode)
 	}
 }
 
-func TestClassifyBatchLegacyModeLessResponseDefaultsToBlock(t *testing.T) {
+func TestClassifyBatchLegacyModeLessResponsePreservesDefaultEnforcement(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"predictions": []map[string]any{{
@@ -178,8 +203,31 @@ func TestClassifyBatchLegacyModeLessResponseDefaultsToBlock(t *testing.T) {
 	if !errors.As(err, &blockedErr) {
 		t.Fatalf("error = %v, want BatchFirewallBlockedError", err)
 	}
-	if len(results) != 1 || results[0].Mode != ModeBlock {
-		t.Fatalf("results = %+v, want one legacy block result", results)
+	if len(results) != 1 || results[0].Mode != "" {
+		t.Fatalf("results = %+v, want one mode-less legacy result", results)
+	}
+}
+
+func TestClassifyLegacyModeLessResponsePreservesShadowOverride(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"prediction": PredictionMalicious,
+			"score":      0.9,
+			"threshold":  0.5,
+		})
+	}))
+	defer ts.Close()
+
+	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fw.Classify(context.Background(), "attack")
+	if err != nil {
+		t.Fatalf("legacy Shadow must preserve the call: %v", err)
+	}
+	if result.Mode != ModeShadow {
+		t.Fatalf("result mode = %q, want shadow", result.Mode)
 	}
 }
 
