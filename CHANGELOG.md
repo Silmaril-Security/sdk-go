@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## v0.6.0
+
+- Adds the existing `shadow | warn | block` request mode contract to single
+  and batch classification, with backend control when mode is omitted.
+- Returns and enforces the backend-resolved effective mode on every result.
+- Retains `WithShadowMode` and `WithBatchShadowMode`: true requests Shadow,
+  false requests Block, and explicit mode options take precedence.
+- Keeps `Options.ShadowMode` source-compatible for Shadow; use `ModeBlock` for
+  an explicit client-level Block override because Go cannot distinguish an
+  omitted bool field from an explicit false value.
 
 ## v0.5.1
 
