@@ -17,6 +17,16 @@ import (
 	"time"
 )
 
+// MarshalJSON makes legacy test fixtures model the backend response contract:
+// every successful classification includes its effective mode.
+func (r singleResponse) MarshalJSON() ([]byte, error) {
+	type responseAlias singleResponse
+	if r.Mode == "" {
+		r.Mode = ModeBlock
+	}
+	return json.Marshal(responseAlias(r))
+}
+
 func noJitter(delay time.Duration) time.Duration { return delay }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -195,7 +205,7 @@ func TestClassifySingleHappyPath(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
 			t.Fatal(err)
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionMalicious, Score: 0.95, Threshold: 0.5})
+		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionMalicious, Score: 0.95, Threshold: 0.5, Mode: ModeShadow})
 	}))
 	defer ts.Close()
 
@@ -246,6 +256,7 @@ func TestClassifyDecodesOptionalSapphireFields(t *testing.T) {
 			Prediction:     PredictionMalicious,
 			Score:          0.91,
 			Threshold:      0.5,
+			Mode:           ModeShadow,
 			PrimaryOutcome: primaryOutcomePtr(string(OutcomeSecretExposure)),
 			OutcomeScores:  map[string]float64{string(OutcomeSecretExposure): 0.8},
 			DetectorScores: map[string]float64{string(OutcomeSecretExposure): 1.0},
@@ -336,8 +347,8 @@ func TestClassifyBatchHappyPath(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
 		_ = json.NewEncoder(w).Encode(batchResponse{
 			Predictions: []singleResponse{
-				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5},
-				{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5},
+				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5, Mode: ModeShadow},
+				{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, Mode: ModeShadow},
 			},
 		})
 	}))
@@ -479,11 +490,12 @@ func TestClassifyBatchDecodesOptionalSapphireFields(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(batchResponse{
 			Predictions: []singleResponse{
-				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5},
+				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5, Mode: ModeShadow},
 				{
 					Prediction:     PredictionMalicious,
 					Score:          0.9,
 					Threshold:      0.5,
+					Mode:           ModeShadow,
 					PrimaryOutcome: primaryOutcomePtr(string(OutcomeSystemCompromise)),
 					OutcomeScores:  map[string]float64{string(OutcomeSystemCompromise): 0.92},
 					DetectorScores: map[string]float64{string(OutcomeInformationDisclosure): 0.85},
@@ -603,7 +615,7 @@ func TestClassifyDrainsRetryBody(t *testing.T) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader(`{"prediction":"BENIGN","score":0.1,"threshold":0.5}`)),
+				Body:       io.NopCloser(strings.NewReader(`{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block"}`)),
 				Request:    req,
 			}, nil
 		}),
@@ -784,7 +796,7 @@ func TestClassifyRetriesNetworkErrors(t *testing.T) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader(`{"prediction":"BENIGN","score":0.1,"threshold":0.5}`)),
+				Body:       io.NopCloser(strings.NewReader(`{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block"}`)),
 				Request:    req,
 			}, nil
 		}),

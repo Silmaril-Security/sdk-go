@@ -15,11 +15,22 @@ const (
 	PredictionMalicious Prediction = "MALICIOUS"
 )
 
+// FirewallMode controls how a malicious decision affects the caller.
+type FirewallMode string
+
+const (
+	ModeShadow FirewallMode = "shadow"
+	ModeWarn   FirewallMode = "warn"
+	ModeBlock  FirewallMode = "block"
+)
+
 // BlockResult is the output of a single classification call.
 type BlockResult struct {
-	Prediction     Prediction                 `json:"prediction"`
-	Score          float64                    `json:"score"`
-	Threshold      float64                    `json:"threshold"`
+	Prediction Prediction `json:"prediction"`
+	Score      float64    `json:"score"`
+	Threshold  float64    `json:"threshold"`
+	// Mode is empty only when a legacy backend omitted mode and no override was requested.
+	Mode           FirewallMode               `json:"mode,omitempty"`
 	PrimaryOutcome PrimaryOutcome             `json:"primary_outcome,omitempty"`
 	OutcomeScores  map[HarmfulOutcome]float64 `json:"outcome_scores,omitempty"`
 	DetectorScores map[HarmfulOutcome]float64 `json:"detector_scores,omitempty"`
@@ -40,6 +51,8 @@ type Options struct {
 	APIURL     string
 	Timeout    time.Duration
 	HTTPClient *http.Client
+	Mode       FirewallMode
+	// Deprecated: use ModeShadow or ModeBlock. An explicit Mode takes precedence.
 	ShadowMode bool
 	OnClassify func(ClassifyEvent)
 }
@@ -48,6 +61,7 @@ type classifyConfig struct {
 	hook       HookLabel
 	toolName   string
 	metadata   *ClassificationMetadata
+	mode       *FirewallMode
 	shadowMode *bool
 	requestID  string
 }
@@ -70,6 +84,11 @@ func WithMetadata(metadata ClassificationMetadata) ClassifyOption {
 	return func(c *classifyConfig) { c.metadata = &metadata }
 }
 
+// WithMode overrides the backend-controlled mode for a single Classify call.
+func WithMode(mode FirewallMode) ClassifyOption {
+	return func(c *classifyConfig) { c.mode = &mode }
+}
+
 // WithShadowMode overrides the client-level shadow-mode setting for a single
 // Classify call.
 func WithShadowMode(enabled bool) ClassifyOption {
@@ -86,6 +105,7 @@ type batchClassifyConfig struct {
 	toolNames   []string
 	metadata    []ClassificationMetadata
 	metadataSet bool
+	mode        *FirewallMode
 	shadowMode  *bool
 	requestID   string
 }
@@ -113,6 +133,11 @@ func WithBatchMetadata(metadata []ClassificationMetadata) BatchClassifyOption {
 	}
 }
 
+// WithBatchMode overrides the backend-controlled mode for one ClassifyBatch call.
+func WithBatchMode(mode FirewallMode) BatchClassifyOption {
+	return func(c *batchClassifyConfig) { c.mode = &mode }
+}
+
 // WithBatchShadowMode overrides the client-level shadow-mode setting for a
 // single ClassifyBatch call.
 func WithBatchShadowMode(enabled bool) BatchClassifyOption {
@@ -132,5 +157,6 @@ type ClassifyEvent struct {
 	Text       string
 	Result     BlockResult
 	Blocked    bool
+	Mode       FirewallMode
 	ShadowMode bool
 }

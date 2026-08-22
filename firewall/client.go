@@ -20,6 +20,7 @@ type Firewall struct {
 	apiKey           string
 	apiURL           string
 	httpClient       *http.Client
+	mode             FirewallMode
 	shadowMode       bool
 	onClassify       func(ClassifyEvent)
 	maxRetries       int
@@ -36,6 +37,13 @@ func New(opts Options) (*Firewall, error) {
 	}
 	if opts.APIURL == "" {
 		return nil, errors.New("firewall: APIURL is required")
+	}
+	mode := opts.Mode
+	if mode == "" && opts.ShadowMode {
+		mode = ModeShadow
+	}
+	if err := validateMode(mode); err != nil {
+		return nil, err
 	}
 	timeout := opts.Timeout
 	if timeout < 0 {
@@ -61,7 +69,8 @@ func New(opts Options) (*Firewall, error) {
 		apiKey:           opts.APIKey,
 		apiURL:           opts.APIURL,
 		httpClient:       httpClient,
-		shadowMode:       opts.ShadowMode,
+		mode:             mode,
+		shadowMode:       mode == ModeShadow,
 		onClassify:       opts.OnClassify,
 		maxRetries:       defaultMaxRetries,
 		retryBaseBackoff: time.Second,

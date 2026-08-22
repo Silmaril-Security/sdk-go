@@ -24,8 +24,8 @@ This SDK provides the low-level Go interface for that workflow:
 - Classify user input, tool calls, tool responses, model output, or system
   prompt content.
 - Preserve hook and tool-name context for more accurate decisions.
-- Enforce backend-owned adaptive thresholds, with shadow mode for
-  observation-only rollout.
+- Enforce backend-owned adaptive thresholds and effective Shadow, Warn, or
+  Block behavior.
 - Send each complete sanitized event in one request.
 - Preserve exact `metadata.conversationId` sequence identity and add one event ID.
 - Retry transient API Gateway and model-serving failures.
@@ -41,7 +41,7 @@ go get github.com/Silmaril-Security/sdk-go/firewall@latest
 For reproducible installs, pin a tagged release:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.5.1
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.6.0
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -135,14 +135,18 @@ type Options struct {
     APIURL           string               // required
     Timeout          time.Duration        // default: 10s for the default HTTP client
     HTTPClient       *http.Client         // default: &http.Client{Timeout: Timeout}
-    ShadowMode       bool                 // default: false; classify calls observe without blocking when true
+    Mode             firewall.FirewallMode // optional: shadow, warn, or block; omitted uses backend configuration
+    ShadowMode       bool                 // deprecated: true maps to shadow; use ModeBlock for explicit block
     OnClassify       func(ClassifyEvent)  // optional telemetry callback for classification decisions
 }
 ```
 
-`Classify` returns the server's prediction, score, and backend-applied
-threshold. By default, `Classify` and `ClassifyBatch` return a typed blocking
-error when the backend returns a malicious verdict at the applied threshold.
+`Classify` returns the server's prediction, score, backend-applied threshold,
+and effective mode. When `Mode` is omitted, the backend controls the mode. A
+malicious result returns a typed blocking error only when the effective mode is
+`firewall.ModeBlock`; `ModeShadow` and `ModeWarn` return the result unchanged.
+A legacy mode-less response leaves `BlockResult.Mode` empty when no override
+was requested; direct SDK calls retain their pre-0.6 Block default internally.
 
 When `HTTPClient` is provided, the SDK clones it without mutating your original
 client. Its timeout is preserved unless `Options.Timeout` is explicitly
@@ -219,18 +223,25 @@ The SDK does not send `threshold` in request payloads. The backend owns the
 applied threshold, which remains available on
 `BlockResult.Threshold` and blocking error types as diagnostic metadata.
 
-## Shadow Mode
+## Modes
 
-`Classify` and `ClassifyBatch` enforce backend predictions by default. Shadow
-mode keeps the same classification result but suppresses
-`FirewallBlockedError` and `BatchFirewallBlockedError`, so live traffic can continue
-while telemetry records what would have blocked:
+Use `ModeShadow`, `ModeWarn`, or `ModeBlock` only when a request needs to
+override the backend-configured mode. Shadow and Warn preserve the caller's
+flow; Block returns `FirewallBlockedError` or `BatchFirewallBlockedError` for a
+malicious decision. Current backends return the effective mode in
+`BlockResult.Mode`.
+
+During a rolling upgrade, an explicit request mode remains authoritative if a
+legacy or mixed-version backend omits or disagrees about `mode`. When both the
+request and response omit it, `BlockResult.Mode` remains empty; integrations
+can retain their pre-0.6 behavior without falsely reporting a backend Block
+mode. Direct SDK enforcement retains its pre-0.6 Block default.
 
 ```go
 fw, err := firewall.New(firewall.Options{
     APIKey:     os.Getenv("SILMARIL_API_KEY"),
     APIURL:     os.Getenv("SILMARIL_API_URL"),
-    ShadowMode: true,
+    Mode:       firewall.ModeShadow,
     OnClassify: func(event firewall.ClassifyEvent) {
         if event.Blocked && event.ShadowMode {
             log.Printf("would block %s score=%.4f", event.Hook, event.Result.Score)
@@ -251,23 +262,28 @@ if err != nil {
 fmt.Printf("shadow result: %s %.4f\n", result.Prediction, result.Score)
 ```
 
-Per-call overrides let you enforce or shadow one surface without changing the
-client default:
+Per-call overrides let you choose one surface without changing the client
+default:
 
 ```go
 _, err = fw.Classify(ctx, text,
     firewall.WithHook(firewall.HookToolResponse),
-    firewall.WithShadowMode(false), // enforce even if the client shadows
+    firewall.WithMode(firewall.ModeBlock),
 )
 
 _, err = fw.ClassifyBatch(ctx, texts,
-    firewall.WithBatchShadowMode(true), // observe this batch only
+    firewall.WithBatchMode(firewall.ModeWarn),
 )
 ```
 
-`ClassifyEvent` includes `Hook`, `ToolName`, `Text`, `Result`, `Blocked`, and
-`ShadowMode`. `Blocked` is true only when the backend returns
-`PredictionMalicious`.
+Legacy `ShadowMode: true` and `WithShadowMode(true)` map to Shadow; per-call
+`WithShadowMode(false)` maps to Block. An explicit `Mode` always takes
+precedence. Because an omitted Go `bool` is indistinguishable from `false`, use
+`ModeBlock` for a client-level explicit Block override.
+
+`ClassifyEvent` includes `Hook`, `ToolName`, `Text`, `Result`, `Blocked`,
+`Mode`, and `ShadowMode`. `Blocked` records a malicious decision; only effective
+Block mode raises a blocking error.
 
 ## Hook labels
 

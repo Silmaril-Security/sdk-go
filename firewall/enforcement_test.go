@@ -16,11 +16,250 @@ import (
 func newSingleResponseServer(t *testing.T, prediction Prediction, score float64) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: prediction, Score: score, Threshold: 0.5})
+		var request singleRequestPayload
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		mode := request.Mode
+		if mode == "" {
+			mode = ModeBlock
+		}
+		_ = json.NewEncoder(w).Encode(singleResponse{
+			Prediction: prediction,
+			Score:      score,
+			Threshold:  0.5,
+			Mode:       mode,
+		})
 	}))
 }
 
-func TestClassifyBlocksByDefault(t *testing.T) {
+func TestClassifyOmitsModeAndUsesBackendEffectiveMode(t *testing.T) {
+	var received singleRequestPayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(singleResponse{
+			Prediction: PredictionMalicious,
+			Score:      0.9,
+			Threshold:  0.5,
+			Mode:       ModeWarn,
+		})
+	}))
+	defer ts.Close()
+
+	var event ClassifyEvent
+	fw, err := New(Options{
+		APIKey: "sk",
+		APIURL: ts.URL,
+		OnClassify: func(e ClassifyEvent) {
+			event = e
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := fw.Classify(context.Background(), "attack")
+	if err != nil {
+		t.Fatalf("warn mode must preserve the call: %v", err)
+	}
+	if received.Mode != "" {
+		t.Fatalf("mode = %q, want omitted so the backend controls it", received.Mode)
+	}
+	if result.Mode != ModeWarn || event.Mode != ModeWarn || event.ShadowMode {
+		t.Fatalf("result = %+v event = %+v", result, event)
+	}
+}
+
+func TestClassifyExplicitModePrecedesLegacyShadowMode(t *testing.T) {
+	var received singleRequestPayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(singleResponse{
+			Prediction: PredictionMalicious,
+			Score:      0.9,
+			Threshold:  0.5,
+			Mode:       ModeShadow,
+		})
+	}))
+	defer ts.Close()
+
+	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL, Mode: ModeWarn, ShadowMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fw.Classify(context.Background(), "attack",
+		WithShadowMode(true),
+		WithMode(ModeBlock),
+	)
+	var blockedErr *FirewallBlockedError
+	if !errors.As(err, &blockedErr) {
+		t.Fatalf("error = %v, want FirewallBlockedError", err)
+	}
+	if received.Mode != ModeBlock {
+		t.Fatalf("request mode = %q, want block", received.Mode)
+	}
+	if result.Mode != ModeBlock {
+		t.Fatalf("effective mode = %q, want block", result.Mode)
+	}
+}
+
+func TestClassifyExplicitShadowCannotBeEscalatedByMixedBackend(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(singleResponse{
+			Prediction: PredictionMalicious,
+			Score:      0.9,
+			Threshold:  0.5,
+			Mode:       ModeBlock,
+		})
+	}))
+	defer ts.Close()
+
+	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL, Mode: ModeShadow})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fw.Classify(context.Background(), "attack")
+	if err != nil {
+		t.Fatalf("shadow override must preserve the call: %v", err)
+	}
+	if result.Mode != ModeShadow {
+		t.Fatalf("effective mode = %q, want shadow", result.Mode)
+	}
+}
+
+func TestClassifyRejectsInvalidBackendMode(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(singleResponse{
+			Prediction: PredictionMalicious,
+			Score:      0.9,
+			Threshold:  0.5,
+			Mode:       FirewallMode("audit"),
+		})
+	}))
+	defer ts.Close()
+
+	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Classify(context.Background(), "attack"); err == nil || !strings.Contains(err.Error(), "invalid backend mode") {
+		t.Fatalf("error = %v, want invalid backend mode", err)
+	}
+}
+
+func TestClassifyLegacyModeLessResponsePreservesDefaultEnforcement(t *testing.T) {
+	var received singleRequestPayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"prediction": PredictionMalicious,
+			"score":      0.9,
+			"threshold":  0.5,
+		})
+	}))
+	defer ts.Close()
+
+	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fw.Classify(context.Background(), "attack")
+	var blockedErr *FirewallBlockedError
+	if !errors.As(err, &blockedErr) {
+		t.Fatalf("error = %v, want FirewallBlockedError", err)
+	}
+	if received.Mode != "" {
+		t.Fatalf("request mode = %q, want omitted", received.Mode)
+	}
+	if result.Mode != "" {
+		t.Fatalf("result mode = %q, want unknown legacy mode", result.Mode)
+	}
+}
+
+func TestClassifyBatchLegacyModeLessResponsePreservesDefaultEnforcement(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"predictions": []map[string]any{{
+				"prediction": PredictionMalicious,
+				"score":      0.9,
+				"threshold":  0.5,
+			}},
+		})
+	}))
+	defer ts.Close()
+
+	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := fw.ClassifyBatch(context.Background(), []string{"attack"})
+	var blockedErr *BatchFirewallBlockedError
+	if !errors.As(err, &blockedErr) {
+		t.Fatalf("error = %v, want BatchFirewallBlockedError", err)
+	}
+	if len(results) != 1 || results[0].Mode != "" {
+		t.Fatalf("results = %+v, want one mode-less legacy result", results)
+	}
+}
+
+func TestClassifyLegacyModeLessResponsePreservesShadowOverride(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"prediction": PredictionMalicious,
+			"score":      0.9,
+			"threshold":  0.5,
+		})
+	}))
+	defer ts.Close()
+
+	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fw.Classify(context.Background(), "attack")
+	if err != nil {
+		t.Fatalf("legacy Shadow must preserve the call: %v", err)
+	}
+	if result.Mode != ModeShadow {
+		t.Fatalf("result mode = %q, want shadow", result.Mode)
+	}
+}
+
+func TestClassifyBatchSendsAndConsumesWarnMode(t *testing.T) {
+	var received batchRequestPayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(batchResponse{Predictions: []singleResponse{{
+			Prediction: PredictionMalicious,
+			Score:      0.9,
+			Threshold:  0.5,
+			Mode:       ModeWarn,
+		}}})
+	}))
+	defer ts.Close()
+
+	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := fw.ClassifyBatch(context.Background(), []string{"attack"}, WithBatchMode(ModeWarn))
+	if err != nil {
+		t.Fatalf("warn batch must preserve the call: %v", err)
+	}
+	if received.Mode != ModeWarn || len(results) != 1 || results[0].Mode != ModeWarn {
+		t.Fatalf("request = %+v results = %+v", received, results)
+	}
+}
+
+func TestClassifyEnforcesBackendBlockMode(t *testing.T) {
 	ts := newSingleResponseServer(t, PredictionMalicious, 0.9)
 	defer ts.Close()
 
@@ -274,8 +513,8 @@ func TestClassifyBatchShadowModeSuppressesBlockAndEmitsEvents(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(batchResponse{
 			Predictions: []singleResponse{
-				{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5},
-				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5},
+				{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, Mode: ModeShadow},
+				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5, Mode: ModeShadow},
 			},
 		})
 	}))
@@ -318,7 +557,7 @@ func TestClassifyBatchShadowModeSuppressesBlockAndEmitsEvents(t *testing.T) {
 func TestClassifyBatchPerCallShadowModeCanObserve(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(batchResponse{
-			Predictions: []singleResponse{{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5}},
+			Predictions: []singleResponse{{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, Mode: ModeShadow}},
 		})
 	}))
 	defer ts.Close()

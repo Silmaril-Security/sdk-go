@@ -10,6 +10,7 @@ import (
 
 type singleRequestPayload struct {
 	Text     string                  `json:"text"`
+	Mode     FirewallMode            `json:"mode,omitempty"`
 	Hook     HookLabel               `json:"hook,omitempty"`
 	ToolName string                  `json:"tool_name,omitempty"`
 	Metadata *ClassificationMetadata `json:"metadata,omitempty"`
@@ -17,6 +18,7 @@ type singleRequestPayload struct {
 
 type batchRequestPayload struct {
 	Texts     []string                  `json:"texts"`
+	Mode      FirewallMode              `json:"mode,omitempty"`
 	Hooks     []HookLabel               `json:"hooks,omitempty"`
 	ToolNames []*string                 `json:"tool_names,omitempty"`
 	Metadata  []*ClassificationMetadata `json:"metadata,omitempty"`
@@ -26,6 +28,7 @@ type singleResponse struct {
 	Prediction     Prediction         `json:"prediction"`
 	Score          float64            `json:"score"`
 	Threshold      float64            `json:"threshold"`
+	Mode           FirewallMode       `json:"mode"`
 	PrimaryOutcome *string            `json:"primary_outcome"`
 	OutcomeScores  map[string]float64 `json:"outcome_scores"`
 	DetectorScores map[string]float64 `json:"detector_scores"`
@@ -46,13 +49,18 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 		cfg.requestID = newRequestID()
 	}
 	text = sanitizeText(text)
+	mode, err := f.effectiveMode(cfg.mode, cfg.shadowMode)
+	if err != nil {
+		return BlockResult{}, err
+	}
+	cfg.mode = &mode
 	result, err := f.classifySingleRaw(ctx, text, cfg)
 	if err != nil {
 		return BlockResult{}, err
 	}
-	event := f.newClassifyEvent(text, cfg.hook, cfg.toolName, result, f.effectiveShadowMode(cfg.shadowMode))
+	event := f.newClassifyEvent(text, cfg.hook, cfg.toolName, result)
 	f.fireClassifyEvent(event)
-	if event.Blocked && !event.ShadowMode {
+	if event.Blocked && event.Mode == ModeBlock {
 		return result, firewallBlockedErrorFromEvent(event)
 	}
 	return result, nil
@@ -67,6 +75,9 @@ func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg class
 		Text:     text,
 		Metadata: metadata,
 	}
+	if cfg.mode != nil {
+		payload.Mode = *cfg.mode
+	}
 	if cfg.hook != "" {
 		payload.Hook = cfg.hook
 	}
@@ -77,7 +88,7 @@ func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg class
 	if err := f.postJSON(ctx, payload, &resp); err != nil {
 		return BlockResult{}, err
 	}
-	return blockResultFromResponse(resp)
+	return blockResultFromResponse(resp, payload.Mode)
 }
 
 // ClassifyBatch classifies multiple independent texts in a single request.
@@ -91,16 +102,20 @@ func (f *Firewall) ClassifyBatch(ctx context.Context, texts []string, opts ...Ba
 		cfg.requestID = newRequestID()
 	}
 	texts = sanitizeTexts(texts)
+	mode, err := f.effectiveMode(cfg.mode, cfg.shadowMode)
+	if err != nil {
+		return nil, err
+	}
+	cfg.mode = &mode
 	results, err := f.classifyBatchRaw(ctx, texts, cfg)
 	if err != nil {
 		return nil, err
 	}
-	shadowMode := f.effectiveShadowMode(cfg.shadowMode)
 	blocked := make([]BlockedBatchItem, 0)
 	for i, result := range results {
-		event := f.newClassifyEvent(texts[i], batchHookAt(cfg, i), batchToolNameAt(cfg, i), result, shadowMode)
+		event := f.newClassifyEvent(texts[i], batchHookAt(cfg, i), batchToolNameAt(cfg, i), result)
 		f.fireClassifyEvent(event)
-		if event.Blocked && !event.ShadowMode {
+		if event.Blocked && event.Mode == ModeBlock {
 			blocked = append(blocked, BlockedBatchItem{
 				Index:    i,
 				Text:     texts[i],
@@ -132,6 +147,9 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 	payload := batchRequestPayload{
 		Texts: texts,
 	}
+	if cfg.mode != nil {
+		payload.Mode = *cfg.mode
+	}
 	if len(cfg.hooks) > 0 {
 		payload.Hooks = cfg.hooks
 	}
@@ -152,7 +170,7 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 	}
 	results := make([]BlockResult, len(resp.Predictions))
 	for i, p := range resp.Predictions {
-		result, err := blockResultFromResponse(p)
+		result, err := blockResultFromResponse(p, payload.Mode)
 		if err != nil {
 			return nil, err
 		}
@@ -161,9 +179,15 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 	return results, nil
 }
 
-func (f *Firewall) newClassifyEvent(text string, hook HookLabel, toolName string, result BlockResult, shadowMode bool) ClassifyEvent {
+func (f *Firewall) newClassifyEvent(text string, hook HookLabel, toolName string, result BlockResult) ClassifyEvent {
 	if hook == "" {
 		hook = HookUnknown
+	}
+	effectiveMode := result.Mode
+	if effectiveMode == "" {
+		// Preserve the pre-0.6 direct-SDK default without claiming that a
+		// mode-less legacy response was a backend Block decision.
+		effectiveMode = ModeBlock
 	}
 	return ClassifyEvent{
 		Hook:       hook,
@@ -171,15 +195,38 @@ func (f *Firewall) newClassifyEvent(text string, hook HookLabel, toolName string
 		Text:       text,
 		Result:     result,
 		Blocked:    result.Prediction == PredictionMalicious,
-		ShadowMode: shadowMode,
+		Mode:       effectiveMode,
+		ShadowMode: effectiveMode == ModeShadow,
 	}
 }
 
-func (f *Firewall) effectiveShadowMode(shadowMode *bool) bool {
-	if shadowMode != nil {
-		return *shadowMode
+func validateMode(mode FirewallMode) error {
+	switch mode {
+	case "", ModeShadow, ModeWarn, ModeBlock:
+		return nil
+	default:
+		return fmt.Errorf("firewall: mode must be shadow, warn, or block, got %q", mode)
 	}
-	return f.shadowMode
+}
+
+func legacyMode(shadowMode bool) FirewallMode {
+	if shadowMode {
+		return ModeShadow
+	}
+	return ModeBlock
+}
+
+func (f *Firewall) effectiveMode(mode *FirewallMode, shadowMode *bool) (FirewallMode, error) {
+	if mode != nil {
+		if err := validateMode(*mode); err != nil {
+			return "", err
+		}
+		return *mode, nil
+	}
+	if shadowMode != nil {
+		return legacyMode(*shadowMode), nil
+	}
+	return f.mode, nil
 }
 
 func (f *Firewall) fireClassifyEvent(event ClassifyEvent) {
@@ -267,11 +314,23 @@ func batchMetadata(cfg batchClassifyConfig, length int) ([]*ClassificationMetada
 	return out, nil
 }
 
-func blockResultFromResponse(resp singleResponse) (BlockResult, error) {
+func blockResultFromResponse(resp singleResponse, requestedMode ...FirewallMode) (BlockResult, error) {
 	switch resp.Prediction {
 	case PredictionBenign, PredictionMalicious:
 	default:
 		return BlockResult{}, fmt.Errorf("firewall: invalid prediction %q", resp.Prediction)
+	}
+	if resp.Mode != "" {
+		if err := validateMode(resp.Mode); err != nil {
+			return BlockResult{}, fmt.Errorf("firewall: invalid backend mode %q", resp.Mode)
+		}
+	}
+	mode := resp.Mode
+	if len(requestedMode) > 0 && requestedMode[0] != "" {
+		// A supplied mode is the per-request override contract. Prefer it
+		// during rolling upgrades so a missing or stale response field cannot
+		// strengthen enforcement beyond what the caller requested.
+		mode = requestedMode[0]
 	}
 	var primary PrimaryOutcome
 	if resp.PrimaryOutcome != nil {
@@ -297,6 +356,7 @@ func blockResultFromResponse(resp singleResponse) (BlockResult, error) {
 		Prediction:     resp.Prediction,
 		Score:          resp.Score,
 		Threshold:      resp.Threshold,
+		Mode:           mode,
 		PrimaryOutcome: primary,
 		OutcomeScores:  outcomeScores,
 		DetectorScores: detectorScores,

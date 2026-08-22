@@ -78,7 +78,7 @@ func TestBlockResultFromResponseDecodesTypedOutcomes(t *testing.T) {
 			Threshold:      0.5,
 			PrimaryOutcome: primaryOutcomePtr(string(outcome)),
 		}
-		result, err := blockResultFromResponse(resp)
+		result, err := blockResultFromResponse(resp, ModeBlock)
 		if err != nil {
 			t.Fatalf("outcome %q decode failed: %v", outcome, err)
 		}
@@ -118,7 +118,7 @@ func TestBlockResultFromResponseValidatesOutcomeFields(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := blockResultFromResponse(tc.resp)
+			_, err := blockResultFromResponse(tc.resp, ModeBlock)
 			if err == nil {
 				t.Fatal("expected error")
 			}
@@ -140,7 +140,7 @@ func TestBlockResultFromResponseDecodesFutureOutcomeLabels(t *testing.T) {
 		DetectorCounts: map[string]int{"new_detector": 1},
 	}
 
-	result, err := blockResultFromResponse(resp)
+	result, err := blockResultFromResponse(resp, ModeBlock)
 	if err != nil {
 		t.Fatalf("decode failed: %v", err)
 	}
