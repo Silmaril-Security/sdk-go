@@ -319,7 +319,7 @@ func blockResultFromResponse(resp singleResponse, fallbackMode ...FirewallMode) 
 		mode = fallbackMode[0]
 	}
 	if mode == "" {
-		return BlockResult{}, errors.New("firewall: backend mode must be shadow, warn, or block")
+		mode = ModeBlock
 	}
 	if err := validateMode(mode); err != nil {
 		return BlockResult{}, fmt.Errorf("firewall: invalid backend mode %q", mode)

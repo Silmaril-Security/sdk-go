@@ -5,6 +5,8 @@
 - Adds the existing `shadow | warn | block` request mode contract to single
   and batch classification, with backend control when mode is omitted.
 - Returns and enforces the backend-resolved effective mode on every result.
+- Treats a successful response without `mode` as legacy Block behavior during
+  a rolling backend upgrade; current backends always return the effective mode.
 - Retains `WithShadowMode` and `WithBatchShadowMode`: true requests Shadow,
   false requests Block, and explicit mode options take precedence.
 - Keeps `Options.ShadowMode` source-compatible for Shadow; use `ModeBlock` for

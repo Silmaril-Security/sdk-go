@@ -228,6 +228,10 @@ override the backend-configured mode. Shadow and Warn preserve the caller's
 flow; Block returns `FirewallBlockedError` or `BatchFirewallBlockedError` for a
 malicious decision. The SDK returns the effective mode in `BlockResult.Mode`:
 
+During a rolling upgrade, a successful response from a pre-0.6 backend that
+omits `mode` retains the legacy SDK behavior and is treated as Block. Current
+backends return the effective mode, including backend-controlled Shadow or Warn.
+
 ```go
 fw, err := firewall.New(firewall.Options{
     APIKey:     os.Getenv("SILMARIL_API_KEY"),

@@ -126,6 +126,63 @@ func TestClassifyRejectsInvalidBackendMode(t *testing.T) {
 	}
 }
 
+func TestClassifyLegacyModeLessResponseDefaultsToBlock(t *testing.T) {
+	var received singleRequestPayload
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatal(err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"prediction": PredictionMalicious,
+			"score":      0.9,
+			"threshold":  0.5,
+		})
+	}))
+	defer ts.Close()
+
+	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fw.Classify(context.Background(), "attack")
+	var blockedErr *FirewallBlockedError
+	if !errors.As(err, &blockedErr) {
+		t.Fatalf("error = %v, want FirewallBlockedError", err)
+	}
+	if received.Mode != "" {
+		t.Fatalf("request mode = %q, want omitted", received.Mode)
+	}
+	if result.Mode != ModeBlock {
+		t.Fatalf("result mode = %q, want block", result.Mode)
+	}
+}
+
+func TestClassifyBatchLegacyModeLessResponseDefaultsToBlock(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"predictions": []map[string]any{{
+				"prediction": PredictionMalicious,
+				"score":      0.9,
+				"threshold":  0.5,
+			}},
+		})
+	}))
+	defer ts.Close()
+
+	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := fw.ClassifyBatch(context.Background(), []string{"attack"})
+	var blockedErr *BatchFirewallBlockedError
+	if !errors.As(err, &blockedErr) {
+		t.Fatalf("error = %v, want BatchFirewallBlockedError", err)
+	}
+	if len(results) != 1 || results[0].Mode != ModeBlock {
+		t.Fatalf("results = %+v, want one legacy block result", results)
+	}
+}
+
 func TestClassifyBatchSendsAndConsumesWarnMode(t *testing.T) {
 	var received batchRequestPayload
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
