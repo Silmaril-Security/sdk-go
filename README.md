@@ -41,7 +41,7 @@ go get github.com/Silmaril-Security/sdk-go/firewall@latest
 For reproducible installs, pin a tagged release:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.6.0
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.6.1
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -126,6 +126,23 @@ func main() {
     }
 }
 ```
+
+## Concurrency
+
+Share one `Firewall` across goroutines. `Classify` and `ClassifyBatch` already
+run independently: each call uses the `context.Context` you pass, builds its
+own request payload, and does not mutate shared client request state. Canceling
+one context aborts only that call, including an in-flight HTTP round-trip or
+retry backoff. Sibling calls on the same client continue.
+
+Pass a distinct context per call when timeouts or cancellation should not be
+shared. The SDK does not start worker pools or extra public async APIs.
+
+Callers remain responsible for concurrent safety of values they own. Do not
+mutate a metadata map (or a batch metadata slice) while that call is in flight.
+If you set `OnClassify`, synchronize any state it touches; overlapping calls
+may invoke it concurrently. If you supply `HTTPClient`, its `Transport` must
+be safe for concurrent `Do` (the Go default transport is).
 
 ## Options
 

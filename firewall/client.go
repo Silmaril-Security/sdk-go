@@ -15,7 +15,14 @@ const (
 )
 
 // Firewall is a client for the Silmaril Firewall /classify endpoint.
-// Instances are safe for concurrent use.
+//
+// One Firewall may be shared by many goroutines. Classify and ClassifyBatch
+// keep request payloads, retries, and response decoding on the call stack, so
+// overlapping calls do not share mutable request state. Canceling one call's
+// context aborts only that call (including in-flight HTTP and retry sleep).
+// Supply a distinct context per call when goroutines need independent
+// deadlines. Callers remain responsible for making OnClassify, caller-owned
+// metadata maps, and any custom HTTP transport safe for concurrent use.
 type Firewall struct {
 	apiKey           string
 	apiURL           string

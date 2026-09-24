@@ -11,5 +11,8 @@
 //
 // The package is dependency-free outside the Go standard library. Long inputs
 // are sent as complete logical events, and SDK metadata carries one event ID
-// while the backend owns sequence ordering and token-window processing.
+// while the backend owns sequence ordering and token-window processing. One
+// Firewall is safe to share across goroutines; each Classify or ClassifyBatch
+// call uses its own context and request state. Callers own concurrent safety
+// of OnClassify, metadata maps, and any custom HTTP transport.
 package firewall

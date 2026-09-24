@@ -1,5 +1,16 @@
 # Changelog
 
+## v0.6.1
+
+- Documents that one `Firewall` may be shared by goroutines: `Classify` and
+  `ClassifyBatch` already accept per-call contexts, isolate request state, and
+  honor cancellation without a separate async API.
+- Records caller responsibility for concurrent safety of `OnClassify`,
+  caller-owned metadata, and any custom HTTP transport.
+- Adds httptest coverage for overlapping calls, out-of-order completion,
+  per-call metadata and request id isolation, batch item order, and sibling
+  isolation when one context is canceled during HTTP or retry sleep.
+
 ## v0.6.0
 
 - Adds the existing `shadow | warn | block` request mode contract to single

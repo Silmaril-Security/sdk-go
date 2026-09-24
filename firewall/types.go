@@ -46,6 +46,8 @@ type ClassificationMetadata map[string]any
 // is set, Timeout is applied only when explicitly non-zero, by cloning the
 // provided client. The SDK also installs a no-redirect policy on cloned clients
 // whose CheckRedirect is nil; caller-provided redirect policies are preserved.
+// A cloned client still shares the caller's Transport; that Transport must be
+// safe for concurrent use if the Firewall is shared across goroutines.
 type Options struct {
 	APIKey     string
 	APIURL     string
@@ -54,6 +56,9 @@ type Options struct {
 	Mode       FirewallMode
 	// Deprecated: use ModeShadow or ModeBlock. An explicit Mode takes precedence.
 	ShadowMode bool
+	// OnClassify is invoked after each classification decision. The callback
+	// may run on overlapping Classify/ClassifyBatch calls; callers must
+	// synchronize any shared state it touches.
 	OnClassify func(ClassifyEvent)
 }
 
@@ -80,6 +85,7 @@ func WithToolName(name string) ClassifyOption {
 }
 
 // WithMetadata attaches caller-provided metadata to a single Classify request.
+// Do not mutate the map while that Classify call is in flight.
 func WithMetadata(metadata ClassificationMetadata) ClassifyOption {
 	return func(c *classifyConfig) { c.metadata = &metadata }
 }
@@ -125,7 +131,8 @@ func WithBatchToolNames(names []string) BatchClassifyOption {
 }
 
 // WithBatchMetadata sets one metadata object per text. Length must match texts.
-// A nil metadata entry is serialized as null for that text.
+// A nil metadata entry is serialized as null for that text. Do not mutate the
+// slice or its maps while that ClassifyBatch call is in flight.
 func WithBatchMetadata(metadata []ClassificationMetadata) BatchClassifyOption {
 	return func(c *batchClassifyConfig) {
 		c.metadata = metadata
