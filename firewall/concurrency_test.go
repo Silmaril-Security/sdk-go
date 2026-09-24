@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -197,15 +198,20 @@ func TestClassifyConcurrentMetadataAndRequestIDIsolation(t *testing.T) {
 }
 
 func TestClassifyBatchConcurrentPreservesItemOrder(t *testing.T) {
+	type capturedItem struct {
+		text  string
+		index int
+		runID string
+	}
 	type captured struct {
 		requestID string
-		texts     []string
-		indexes   []int
+		items     []capturedItem
 	}
 	var mu sync.Mutex
 	var got []captured
 	started := make(chan struct{}, 2)
-	release := make(chan struct{})
+	hold := make(chan struct{})
+	release := sync.OnceFunc(func() { close(hold) })
 
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload batchRequestPayload
@@ -213,23 +219,27 @@ func TestClassifyBatchConcurrentPreservesItemOrder(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		indexes := make([]int, len(payload.Metadata))
+		if len(payload.Metadata) != len(payload.Texts) {
+			t.Errorf("metadata length %d, want %d", len(payload.Metadata), len(payload.Texts))
+			return
+		}
+		items := make([]capturedItem, len(payload.Texts))
 		requestID := ""
 		for i, meta := range payload.Metadata {
 			silmaril, _ := (*meta)["silmaril"].(map[string]any)
 			requestID, _ = silmaril["request_id"].(string)
-			switch v := silmaril["input_index"].(type) {
-			case float64:
-				indexes[i] = int(v)
-			default:
-				t.Errorf("input_index[%d] = %#v", i, silmaril["input_index"])
+			runID, _ := (*meta)["run_id"].(string)
+			index, ok := silmaril["input_index"].(float64)
+			if !ok {
+				t.Errorf("input_index[%d] = %#v, want numeric", i, silmaril["input_index"])
 			}
+			items[i] = capturedItem{text: payload.Texts[i], index: int(index), runID: runID}
 		}
 		mu.Lock()
-		got = append(got, captured{requestID: requestID, texts: append([]string(nil), payload.Texts...), indexes: indexes})
+		got = append(got, captured{requestID: requestID, items: items})
 		mu.Unlock()
 		started <- struct{}{}
-		<-release
+		<-hold
 		predictions := make([]singleResponse, len(payload.Texts))
 		for i, text := range payload.Texts {
 			score := 0.1
@@ -241,6 +251,7 @@ func TestClassifyBatchConcurrentPreservesItemOrder(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(batchResponse{Predictions: predictions})
 	}))
 	defer ts.Close()
+	defer release()
 
 	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
 	if err != nil {
@@ -281,7 +292,7 @@ func TestClassifyBatchConcurrentPreservesItemOrder(t *testing.T) {
 			t.Fatal("batch requests did not overlap")
 		}
 	}
-	close(release)
+	release()
 
 	gotA := false
 	gotB := false
@@ -307,36 +318,42 @@ func TestClassifyBatchConcurrentPreservesItemOrder(t *testing.T) {
 		t.Fatal("missing batch outcome")
 	}
 
+	want := map[string][]capturedItem{
+		"batch-a": {
+			{text: "a1", index: 0, runID: "a-0"},
+			{text: "a2", index: 1, runID: "a-1"},
+		},
+		"batch-b": {
+			{text: "b3", index: 0, runID: "b-0"},
+			{text: "b4", index: 1, runID: "b-1"},
+			{text: "b5", index: 2, runID: "b-2"},
+		},
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if len(got) != 2 {
 		t.Fatalf("captured %d batch payloads, want 2", len(got))
 	}
-	for _, item := range got {
-		switch item.requestID {
-		case "batch-a":
-			if len(item.texts) != 2 || item.texts[0] != "a1" || item.texts[1] != "a2" {
-				t.Errorf("batch-a texts = %v", item.texts)
-			}
-			if len(item.indexes) != 2 || item.indexes[0] != 0 || item.indexes[1] != 1 {
-				t.Errorf("batch-a indexes = %v", item.indexes)
-			}
-		case "batch-b":
-			if len(item.texts) != 3 || item.texts[0] != "b3" || item.texts[1] != "b4" || item.texts[2] != "b5" {
-				t.Errorf("batch-b texts = %v", item.texts)
-			}
-			if len(item.indexes) != 3 || item.indexes[0] != 0 || item.indexes[1] != 1 || item.indexes[2] != 2 {
-				t.Errorf("batch-b indexes = %v", item.indexes)
-			}
-		default:
-			t.Errorf("unexpected request_id %q", item.requestID)
+	for _, batch := range got {
+		expected, ok := want[batch.requestID]
+		if !ok {
+			t.Errorf("unexpected or duplicated request_id %q", batch.requestID)
+			continue
 		}
+		delete(want, batch.requestID)
+		if !reflect.DeepEqual(batch.items, expected) {
+			t.Errorf("%s items = %+v, want %+v", batch.requestID, batch.items, expected)
+		}
+	}
+	for requestID := range want {
+		t.Errorf("no request captured for %q", requestID)
 	}
 }
 
 func TestClassifyCancelDuringHTTPDoesNotAffectSibling(t *testing.T) {
 	started := make(chan string, 2)
-	releaseSibling := make(chan struct{})
+	holdSibling := make(chan struct{})
+	releaseSibling := sync.OnceFunc(func() { close(holdSibling) })
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var payload singleRequestPayload
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -348,12 +365,13 @@ func TestClassifyCancelDuringHTTPDoesNotAffectSibling(t *testing.T) {
 			<-r.Context().Done()
 			return
 		}
-		<-releaseSibling
+		<-holdSibling
 		_ = json.NewEncoder(w).Encode(singleResponse{
 			Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5,
 		})
 	}))
 	defer ts.Close()
+	defer releaseSibling()
 
 	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
 	if err != nil {
@@ -361,6 +379,7 @@ func TestClassifyCancelDuringHTTPDoesNotAffectSibling(t *testing.T) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	cancelErr := make(chan error, 1)
 	siblingRes := make(chan BlockResult, 1)
 	siblingErr := make(chan error, 1)
@@ -398,7 +417,7 @@ func TestClassifyCancelDuringHTTPDoesNotAffectSibling(t *testing.T) {
 		t.Fatal("canceled call did not return")
 	}
 
-	close(releaseSibling)
+	releaseSibling()
 	select {
 	case err := <-siblingErr:
 		if err != nil {
@@ -441,15 +460,19 @@ func TestClassifyCancelDuringRetrySleepDoesNotAffectSibling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fw.retryBaseBackoff = 500 * time.Millisecond
-	enteredRetryDelay := make(chan struct{})
-	var enteredOnce sync.Once
+	// An hour-long backoff cannot elapse inside this test, so returning at all
+	// means cancellation aborted the wait rather than the timer firing.
+	fw.retryBaseBackoff = time.Hour
+	fw.retryMaxBackoff = time.Hour
+	retryDelayComputed := make(chan struct{})
+	var computedOnce sync.Once
 	fw.retryJitter = func(delay time.Duration) time.Duration {
-		enteredOnce.Do(func() { close(enteredRetryDelay) })
+		computedOnce.Do(func() { close(retryDelayComputed) })
 		return delay
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 	cancelErr := make(chan error, 1)
 	go func() {
 		_, err := fw.Classify(ctx, "cancel-me")
@@ -457,9 +480,9 @@ func TestClassifyCancelDuringRetrySleepDoesNotAffectSibling(t *testing.T) {
 	}()
 
 	select {
-	case <-enteredRetryDelay:
+	case <-retryDelayComputed:
 	case <-time.After(2 * time.Second):
-		t.Fatal("retry delay hook never ran")
+		t.Fatal("retry delay was never computed")
 	}
 
 	siblingRes := make(chan BlockResult, 1)
@@ -495,5 +518,57 @@ func TestClassifyCancelDuringRetrySleepDoesNotAffectSibling(t *testing.T) {
 	res := <-siblingRes
 	if res.Score != 0.22 {
 		t.Errorf("sibling result = %+v", res)
+	}
+}
+
+// doneObservingContext reports the first read of Done. A select evaluates its
+// channel operands on entry, so that read marks the moment waitBeforeRetry
+// begins waiting.
+type doneObservingContext struct {
+	context.Context
+	once     sync.Once
+	observed chan struct{}
+}
+
+func (c *doneObservingContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.observed) })
+	return c.Context.Done()
+}
+
+func TestWaitBeforeRetryCancelsAfterEnteringWait(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	observing := &doneObservingContext{Context: ctx, observed: make(chan struct{})}
+
+	waitErr := make(chan error, 1)
+	go func() {
+		waitErr <- waitBeforeRetry(observing, time.Hour)
+	}()
+
+	select {
+	case <-observing.observed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitBeforeRetry never entered its wait")
+	}
+	select {
+	case err := <-waitErr:
+		t.Fatalf("waitBeforeRetry returned before cancel: %v", err)
+	default:
+	}
+
+	cancel()
+	select {
+	case err := <-waitErr:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("waitBeforeRetry error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("waitBeforeRetry did not return after cancel")
+	}
+}
+
+func TestWaitBeforeRetryReturnsAfterDelay(t *testing.T) {
+	if err := waitBeforeRetry(context.Background(), time.Millisecond); err != nil {
+		t.Fatalf("waitBeforeRetry error = %v, want nil", err)
 	}
 }
