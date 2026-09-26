@@ -41,7 +41,7 @@ go get github.com/Silmaril-Security/sdk-go/firewall@latest
 For reproducible installs, pin a tagged release:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.6.1
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.7.0
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -159,8 +159,9 @@ type Options struct {
 ```
 
 `Classify` returns the server's prediction, score, backend-applied threshold,
-and effective mode. When `Mode` is omitted, the backend controls the mode. A
-malicious result returns a typed blocking error only when the effective mode is
+effective mode, and any governance decision. When `Mode` is omitted, the
+backend controls the mode. A malicious prediction or governance Block action
+returns a typed blocking error only when the effective mode is
 `firewall.ModeBlock`; `ModeShadow` and `ModeWarn` return the result unchanged.
 A legacy mode-less response leaves `BlockResult.Mode` empty when no override
 was requested; direct SDK calls retain their pre-0.6 Block default internally.
@@ -299,8 +300,46 @@ precedence. Because an omitted Go `bool` is indistinguishable from `false`, use
 `ModeBlock` for a client-level explicit Block override.
 
 `ClassifyEvent` includes `Hook`, `ToolName`, `Text`, `Result`, `Blocked`,
-`Mode`, and `ShadowMode`. `Blocked` records a malicious decision; only effective
-Block mode raises a blocking error.
+`Mode`, and `ShadowMode`. `Blocked` records a malicious prediction or
+governance Block action; only effective Block mode raises a blocking error.
+
+## Governance resource identity
+
+Callers may attach one validated canonical resource and resolver snapshot to a
+single request with `WithResource` and `WithIdentityRevision`. Batch callers
+use `WithBatchResources` and `WithBatchIdentityRevision`; the resources slice
+must contain one nullable entry per text in the same order. Raw tool names are
+still sent independently for classification and audit.
+
+For MCP host dispatch names, construct `MCPResolver` from the configured tool
+catalog already held by the adapter. The resolver performs no configuration
+discovery. It recognizes `mcp__<server>__<tool>` and
+`MCP:<server>:<tool>`, prefers an exact configured server and tool, then allows
+only a unique host alias formed by replacing configured-server hyphens with
+underscores. Tool identities remain exact and case-sensitive.
+
+```go
+resolver, err := firewall.NewMCPResolver([]firewall.Resource{{
+    Kind:     firewall.ResourceKindMCPTool,
+    ID:       "search_papers",
+    ParentID: "arxiv-mcp-server",
+}})
+if err != nil {
+    log.Fatal(err)
+}
+
+resolution := resolver.Resolve("mcp__arxiv_mcp_server__search_papers")
+if resolution.Status != firewall.MCPResolutionResolved {
+    // Handle MCPResolutionUnresolved or MCPResolutionAmbiguous explicitly.
+    return
+}
+
+_, err = fw.Classify(ctx, text,
+    firewall.WithToolName("mcp__arxiv_mcp_server__search_papers"),
+    firewall.WithResource(*resolution.Resource),
+    firewall.WithIdentityRevision(identityRevision),
+)
+```
 
 ## Hook labels
 

@@ -18,6 +18,9 @@ import (
 const maxErrorBodyBytes = 1 << 16
 
 func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
+	if err := validateOutboundPayload(payload); err != nil {
+		return err
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("firewall: marshal request: %w", err)
@@ -58,6 +61,17 @@ func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
 			return fmt.Errorf("firewall: decode response: %w", err)
 		}
 		_ = resp.Body.Close()
+		return nil
+	}
+}
+
+func validateOutboundPayload(payload any) error {
+	switch payload := payload.(type) {
+	case singleRequestPayload:
+		return payload.validateIdentity()
+	case batchRequestPayload:
+		return payload.validateIdentity()
+	default:
 		return nil
 	}
 }

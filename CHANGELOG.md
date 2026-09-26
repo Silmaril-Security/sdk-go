@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.7.0
+
+- Adds validated canonical governance resource references for agents, tools,
+  MCP servers and tools, plugins, skills, and extensions.
+- Sends optional `resource`/`resources` and `identity_revision` fields while
+  preserving raw `tool_name`/`tool_names` values.
+- Parses governance action, rule, policy version, resource, identity revision,
+  and identity-failure reason from classification responses.
+- Enforces governance Block decisions even when the classifier prediction is
+  Benign, while preserving explicit Shadow and Warn mode behavior and existing
+  malicious-prediction enforcement.
+- Adds an immutable, caller-configured MCP resolver for `mcp__` and `MCP:`
+  dispatch names. Resolution prefers exact configured identities, then a
+  unique host alias, and reports unresolved or ambiguous outcomes explicitly.
+- Vendors and verifies governance identity contract 1.0.0, including exact
+  artifact digests and all matching vectors.
+
 ## v0.6.1
 
 - Documents that one `Firewall` may be shared by goroutines: `Classify` and
