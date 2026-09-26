@@ -17,6 +17,12 @@
 - Vendors and verifies governance identity contract 1.0.0, including exact
   artifact digests and all matching vectors.
 
+Compatibility: deploy compatible Firewall readers before resolving this
+module. Upgrade downstream adapters and the separately bundled macOS runtime
+after SDK publication. Keep existing policies on their current schema until
+every enforcement consumer in the target scope is verified against contract
+1.0.0; then explicitly activate runtime schema 6.
+
 ## v0.6.1
 
 - Documents that one `Firewall` may be shared by goroutines: `Classify` and
