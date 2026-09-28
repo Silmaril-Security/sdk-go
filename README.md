@@ -41,7 +41,7 @@ go get github.com/Silmaril-Security/sdk-go/firewall@latest
 For reproducible installs, pin a tagged release:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.6.1
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.7.0
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -159,8 +159,9 @@ type Options struct {
 ```
 
 `Classify` returns the server's prediction, score, backend-applied threshold,
-and effective mode. When `Mode` is omitted, the backend controls the mode. A
-malicious result returns a typed blocking error only when the effective mode is
+effective mode, and any governance decision. When `Mode` is omitted, the
+backend controls the mode. A malicious prediction or governance Block action
+returns a typed blocking error only when the effective mode is
 `firewall.ModeBlock`; `ModeShadow` and `ModeWarn` return the result unchanged.
 A legacy mode-less response leaves `BlockResult.Mode` empty when no override
 was requested; direct SDK calls retain their pre-0.6 Block default internally.
@@ -299,8 +300,46 @@ precedence. Because an omitted Go `bool` is indistinguishable from `false`, use
 `ModeBlock` for a client-level explicit Block override.
 
 `ClassifyEvent` includes `Hook`, `ToolName`, `Text`, `Result`, `Blocked`,
-`Mode`, and `ShadowMode`. `Blocked` records a malicious decision; only effective
-Block mode raises a blocking error.
+`Mode`, and `ShadowMode`. `Blocked` records a malicious prediction or
+governance Block action; only effective Block mode raises a blocking error.
+
+## Governance resource identity
+
+Callers may attach one validated canonical resource and resolver snapshot to a
+single request with `WithResource` and `WithIdentityRevision`. Batch callers
+use `WithBatchResources` and `WithBatchIdentityRevision`; the resources slice
+must contain one nullable entry per text in the same order. Raw tool names are
+still sent independently for classification and audit.
+
+For MCP host dispatch names, construct `MCPResolver` from the configured
+catalog already held by the adapter. The resolver performs no configuration
+discovery. It recognizes `mcp__<server>__<tool>` and `MCP:<server>:<tool>`.
+Configured server and tool IDs may contain those separators.
+
+`NewMCPResolver` takes a full tool catalog and enumerates complete server/tool
+spellings. Each tool parent is configured for that call. `NewMCPCatalogResolver`
+keeps that behavior for a tool list alone. Server IDs alone use every
+separator-bounded configured server ID or alias as a prefix, and the remainder
+is the tool ID when it is a valid resource ID, including an ID that contains
+`__` or `:`. A whitespace-only remainder stays unresolved. Supplying servers and
+tools together still matches complete spellings, but only tools whose parent is
+one of those servers participate; a tool row for any other parent is ignored.
+Aliases bind only to the configured servers. Exact and alias candidates are
+equal. One distinct canonical resource resolves; more than one is ambiguous. A
+caller that already has the typed canonical resource passes it with
+`WithResource` and does not use this resolver. Tool identities remain
+case-sensitive.
+
+For unresolved or ambiguous results, do not send a guessed resource. In Block
+mode, stop the affected call before dispatch and report incomplete protection.
+In Shadow and Warn modes, retain the mode's dispatch behavior and report
+incomplete protection. Pass a typed canonical resource with `WithResource`
+or `WithBatchResources`, and pass the actual catalog revision with
+`WithIdentityRevision` or `WithBatchIdentityRevision`. Deploy compatible
+Firewall readers before clients send `resource` or `identity_revision`. Keep
+existing policies on their current schema until every enforcement consumer in
+the target scope is verified against contract 1.0.0, then explicitly activate
+runtime schema 6.
 
 ## Hook labels
 

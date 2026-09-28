@@ -9,30 +9,35 @@ import (
 )
 
 type singleRequestPayload struct {
-	Text     string                  `json:"text"`
-	Mode     FirewallMode            `json:"mode,omitempty"`
-	Hook     HookLabel               `json:"hook,omitempty"`
-	ToolName string                  `json:"tool_name,omitempty"`
-	Metadata *ClassificationMetadata `json:"metadata,omitempty"`
+	Text             string                  `json:"text"`
+	Mode             FirewallMode            `json:"mode,omitempty"`
+	Hook             HookLabel               `json:"hook,omitempty"`
+	ToolName         string                  `json:"tool_name,omitempty"`
+	Metadata         *ClassificationMetadata `json:"metadata,omitempty"`
+	Resource         *Resource               `json:"resource,omitempty"`
+	IdentityRevision string                  `json:"identity_revision,omitempty"`
 }
 
 type batchRequestPayload struct {
-	Texts     []string                  `json:"texts"`
-	Mode      FirewallMode              `json:"mode,omitempty"`
-	Hooks     []HookLabel               `json:"hooks,omitempty"`
-	ToolNames []*string                 `json:"tool_names,omitempty"`
-	Metadata  []*ClassificationMetadata `json:"metadata,omitempty"`
+	Texts            []string                  `json:"texts"`
+	Mode             FirewallMode              `json:"mode,omitempty"`
+	Hooks            []HookLabel               `json:"hooks,omitempty"`
+	ToolNames        []*string                 `json:"tool_names,omitempty"`
+	Metadata         []*ClassificationMetadata `json:"metadata,omitempty"`
+	Resources        []*Resource               `json:"resources,omitempty"`
+	IdentityRevision string                    `json:"identity_revision,omitempty"`
 }
 
 type singleResponse struct {
-	Prediction     Prediction         `json:"prediction"`
-	Score          float64            `json:"score"`
-	Threshold      float64            `json:"threshold"`
-	Mode           FirewallMode       `json:"mode"`
-	PrimaryOutcome *string            `json:"primary_outcome"`
-	OutcomeScores  map[string]float64 `json:"outcome_scores"`
-	DetectorScores map[string]float64 `json:"detector_scores"`
-	DetectorCounts map[string]int     `json:"detector_counts"`
+	Prediction     Prediction          `json:"prediction"`
+	Score          float64             `json:"score"`
+	Threshold      float64             `json:"threshold"`
+	Mode           FirewallMode        `json:"mode"`
+	PrimaryOutcome *string             `json:"primary_outcome"`
+	OutcomeScores  map[string]float64  `json:"outcome_scores"`
+	DetectorScores map[string]float64  `json:"detector_scores"`
+	DetectorCounts map[string]int      `json:"detector_counts"`
+	Governance     *GovernanceDecision `json:"governance,omitempty"`
 }
 
 type batchResponse struct {
@@ -84,6 +89,18 @@ func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg class
 	if cfg.toolName != "" {
 		payload.ToolName = cfg.toolName
 	}
+	if cfg.identityRevisionSet {
+		if err := validateSuppliedIdentityRevision(cfg.identityRevision); err != nil {
+			return BlockResult{}, err
+		}
+		payload.IdentityRevision = cfg.identityRevision
+	}
+	if cfg.resource != nil {
+		payload.Resource = cloneResource(cfg.resource)
+	}
+	if err := payload.validateIdentity(); err != nil {
+		return BlockResult{}, err
+	}
 	var resp singleResponse
 	if err := f.postJSON(ctx, payload, &resp); err != nil {
 		return BlockResult{}, err
@@ -92,7 +109,7 @@ func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg class
 }
 
 // ClassifyBatch classifies multiple independent texts in a single request.
-// When hooks or toolNames are provided, their length must equal len(texts).
+// When hooks, tool names, or resources are provided, their length must equal len(texts).
 func (f *Firewall) ClassifyBatch(ctx context.Context, texts []string, opts ...BatchClassifyOption) ([]BlockResult, error) {
 	var cfg batchClassifyConfig
 	for _, opt := range opts {
@@ -144,6 +161,14 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 	if cfg.metadataSet && len(cfg.metadata) != len(texts) {
 		return nil, fmt.Errorf("firewall: metadata length %d does not match texts length %d", len(cfg.metadata), len(texts))
 	}
+	if cfg.resourcesSet && len(cfg.resources) != len(texts) {
+		return nil, fmt.Errorf("firewall: resources length %d does not match texts length %d", len(cfg.resources), len(texts))
+	}
+	if cfg.identityRevisionSet {
+		if err := validateSuppliedIdentityRevision(cfg.identityRevision); err != nil {
+			return nil, err
+		}
+	}
 	payload := batchRequestPayload{
 		Texts: texts,
 	}
@@ -161,6 +186,15 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 		return nil, err
 	}
 	payload.Metadata = metadata
+	if cfg.resourcesSet {
+		payload.Resources = cloneResources(cfg.resources)
+	}
+	if cfg.identityRevisionSet {
+		payload.IdentityRevision = cfg.identityRevision
+	}
+	if err := payload.validateIdentity(); err != nil {
+		return nil, err
+	}
 	var resp batchResponse
 	if err := f.postJSON(ctx, payload, &resp); err != nil {
 		return nil, err
@@ -194,7 +228,7 @@ func (f *Firewall) newClassifyEvent(text string, hook HookLabel, toolName string
 		ToolName:   toolName,
 		Text:       text,
 		Result:     result,
-		Blocked:    result.Prediction == PredictionMalicious,
+		Blocked:    result.Prediction == PredictionMalicious || result.governanceBlocked(),
 		Mode:       effectiveMode,
 		ShadowMode: effectiveMode == ModeShadow,
 	}
@@ -352,6 +386,11 @@ func blockResultFromResponse(resp singleResponse, requestedMode ...FirewallMode)
 	if err != nil {
 		return BlockResult{}, err
 	}
+	if resp.Governance != nil {
+		if err := resp.Governance.Validate(); err != nil {
+			return BlockResult{}, err
+		}
+	}
 	return BlockResult{
 		Prediction:     resp.Prediction,
 		Score:          resp.Score,
@@ -361,5 +400,50 @@ func blockResultFromResponse(resp singleResponse, requestedMode ...FirewallMode)
 		OutcomeScores:  outcomeScores,
 		DetectorScores: detectorScores,
 		DetectorCounts: detectorCounts,
+		Governance:     resp.Governance,
 	}, nil
+}
+
+func (p singleRequestPayload) validateIdentity() error {
+	if p.Resource != nil {
+		if err := p.Resource.Validate(); err != nil {
+			return err
+		}
+	}
+	return validateOptionalIdentityRevision(p.IdentityRevision)
+}
+
+func (p batchRequestPayload) validateIdentity() error {
+	if p.Resources != nil && len(p.Resources) != len(p.Texts) {
+		return fmt.Errorf("firewall: resources length %d does not match texts length %d", len(p.Resources), len(p.Texts))
+	}
+	for i, resource := range p.Resources {
+		if resource == nil {
+			continue
+		}
+		if err := resource.Validate(); err != nil {
+			return fmt.Errorf("%w (resources[%d])", err, i)
+		}
+	}
+	return validateOptionalIdentityRevision(p.IdentityRevision)
+}
+
+func cloneResource(resource *Resource) *Resource {
+	if resource == nil {
+		return nil
+	}
+	copy := *resource
+	return &copy
+}
+
+func cloneResources(resources []*Resource) []*Resource {
+	out := make([]*Resource, len(resources))
+	for i, resource := range resources {
+		out[i] = cloneResource(resource)
+	}
+	return out
+}
+
+func (r BlockResult) governanceBlocked() bool {
+	return r.Governance != nil && r.Governance.Action == GovernanceActionBlock
 }
