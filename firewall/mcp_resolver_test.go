@@ -339,6 +339,129 @@ func TestMCPResolverLongSeparatorNamesStayUnresolvedOrExact(t *testing.T) {
 	}
 }
 
+func TestMCPServerCatalogResolvesNestedToolID(t *testing.T) {
+	resolver, err := NewMCPCatalogResolver(MCPCatalog{
+		Servers: []Resource{
+			{Kind: ResourceKindMCPServer, ID: "prod__west"},
+			{Kind: ResourceKindMCPServer, ID: "prod:west"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		dispatch string
+		parent   string
+		tool     string
+	}{
+		{dispatch: "mcp__prod__west__search__papers", parent: "prod__west", tool: "search__papers"},
+		{dispatch: "MCP:prod:west:search:papers", parent: "prod:west", tool: "search:papers"},
+	}
+	for _, tc := range cases {
+		resolution := resolver.Resolve(tc.dispatch)
+		if resolution.Status != MCPResolutionResolved || resolution.Resource == nil {
+			t.Fatalf("%q resolution = %+v", tc.dispatch, resolution)
+		}
+		if resolution.Resource.Kind != ResourceKindMCPTool ||
+			resolution.Resource.ParentID != tc.parent ||
+			resolution.Resource.ID != tc.tool {
+			t.Fatalf("%q resource = %+v", tc.dispatch, resolution.Resource)
+		}
+		if err := resolution.Resource.Validate(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestMCPServerCatalogOverlappingIDsAreAmbiguous(t *testing.T) {
+	resolver, err := NewMCPCatalogResolver(MCPCatalog{
+		Servers: []Resource{
+			{Kind: ResourceKindMCPServer, ID: "prod"},
+			{Kind: ResourceKindMCPServer, ID: "prod__west"},
+			{Kind: ResourceKindMCPServer, ID: "prod:west"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dispatch := range []string{
+		"mcp__prod__west__search",
+		"MCP:prod:west:search",
+	} {
+		resolution := resolver.Resolve(dispatch)
+		if resolution.Status != MCPResolutionAmbiguous || resolution.Resource != nil {
+			t.Fatalf("%q resolution = %+v", dispatch, resolution)
+		}
+	}
+	unique := resolver.Resolve("mcp__prod__list")
+	if unique.Status != MCPResolutionResolved || unique.Resource == nil ||
+		unique.Resource.ParentID != "prod" || unique.Resource.ID != "list" {
+		t.Fatalf("unique server resolution = %+v", unique)
+	}
+}
+
+func TestMCPServerCatalogExactAliasCollisionAndExplicitAlias(t *testing.T) {
+	resolver, err := NewMCPCatalogResolver(MCPCatalog{
+		Servers: []Resource{
+			{Kind: ResourceKindMCPServer, ID: "git_hub"},
+			{Kind: ResourceKindMCPServer, ID: "git-hub"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	collision := resolver.Resolve("mcp__git_hub__search")
+	if collision.Status != MCPResolutionAmbiguous || collision.Resource != nil {
+		t.Fatalf("collision = %+v", collision)
+	}
+	aliasOnly, err := NewMCPCatalogResolver(MCPCatalog{
+		Servers: []Resource{{Kind: ResourceKindMCPServer, ID: "git-hub"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := aliasOnly.Resolve("MCP:git_hub:search")
+	if resolved.Status != MCPResolutionResolved || resolved.Resource == nil ||
+		resolved.Resource.ParentID != "git-hub" || resolved.Resource.ID != "search" {
+		t.Fatalf("alias resolution = %+v", resolved)
+	}
+
+	explicit, err := NewMCPCatalogResolver(MCPCatalog{
+		Servers: []Resource{{Kind: ResourceKindMCPServer, ID: "github"}},
+		Aliases: []MCPServerAlias{{ServerID: "github", Alias: "gh"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gh := explicit.Resolve("mcp__gh__search__issues")
+	if gh.Status != MCPResolutionResolved || gh.Resource == nil ||
+		gh.Resource.ParentID != "github" || gh.Resource.ID != "search__issues" {
+		t.Fatalf("explicit alias = %+v", gh)
+	}
+	for _, dispatch := range []string{"mcp__github__", "mcp__github", "search"} {
+		if resolution := explicit.Resolve(dispatch); resolution.Status != MCPResolutionUnresolved || resolution.Resource != nil {
+			t.Fatalf("%q resolution = %+v", dispatch, resolution)
+		}
+	}
+}
+
+func TestNewMCPCatalogResolverRejectsMixedOrUnknownAliases(t *testing.T) {
+	_, err := NewMCPCatalogResolver(MCPCatalog{
+		Tools:   []Resource{{Kind: ResourceKindMCPTool, ID: "search", ParentID: "server"}},
+		Servers: []Resource{{Kind: ResourceKindMCPServer, ID: "server"}},
+	})
+	if err == nil {
+		t.Fatal("expected mixed catalog error")
+	}
+	_, err = NewMCPCatalogResolver(MCPCatalog{
+		Servers: []Resource{{Kind: ResourceKindMCPServer, ID: "server"}},
+		Aliases: []MCPServerAlias{{ServerID: "other", Alias: "alias"}},
+	})
+	if err == nil {
+		t.Fatal("expected unknown alias server error")
+	}
+}
+
 func TestNewMCPResolverValidatesConfiguredCatalog(t *testing.T) {
 	cases := []struct {
 		name       string

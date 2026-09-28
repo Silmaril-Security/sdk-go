@@ -311,16 +311,20 @@ use `WithBatchResources` and `WithBatchIdentityRevision`; the resources slice
 must contain one nullable entry per text in the same order. Raw tool names are
 still sent independently for classification and audit.
 
-For MCP host dispatch names, construct `MCPResolver` from the configured tool
+For MCP host dispatch names, construct `MCPResolver` from the configured
 catalog already held by the adapter. The resolver performs no configuration
-discovery. It recognizes `mcp__<server>__<tool>` and
-`MCP:<server>:<tool>`. Configured server and tool IDs may contain those
-separators. Resolution gathers every complete configured spelling, including
-the alias formed by replacing hyphens in a configured server ID with
-underscores. One distinct canonical resource resolves. Distinct exact and alias
-candidates for the same raw name are ambiguous. A caller that already has the
-typed canonical resource passes it with `WithResource` and does not use this
-resolver. Tool identities remain case-sensitive.
+discovery. It recognizes `mcp__<server>__<tool>` and `MCP:<server>:<tool>`.
+Configured server and tool IDs may contain those separators.
+
+`NewMCPResolver` takes a full tool catalog and enumerates complete server/tool
+spellings. `NewMCPCatalogResolver` accepts that same tool list, or server IDs
+alone. With server IDs only, every separator-bounded configured server ID or
+alias is a prefix, and the entire nonempty remainder is the tool ID. Aliases
+are the hyphen-to-underscore spelling of each configured server plus any
+`MCPServerAlias` values. Exact and alias candidates are equal. One distinct
+canonical resource resolves; more than one is ambiguous. A caller that already
+has the typed canonical resource passes it with `WithResource` and does not use
+this resolver. Tool identities remain case-sensitive.
 
 ```go
 resolver, err := firewall.NewMCPResolver([]firewall.Resource{{
@@ -337,6 +341,18 @@ if resolution.Status != firewall.MCPResolutionResolved {
     // Handle MCPResolutionUnresolved or MCPResolutionAmbiguous explicitly.
     return
 }
+
+serverResolver, err := firewall.NewMCPCatalogResolver(firewall.MCPCatalog{
+    Servers: []firewall.Resource{{
+        Kind: firewall.ResourceKindMCPServer,
+        ID:   "prod__west",
+    }},
+})
+if err != nil {
+    log.Fatal(err)
+}
+nested := serverResolver.Resolve("mcp__prod__west__search__papers")
+_ = nested
 
 _, err = fw.Classify(ctx, text,
     firewall.WithToolName("mcp__arxiv_mcp_server__search_papers"),

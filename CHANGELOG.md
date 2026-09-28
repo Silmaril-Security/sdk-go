@@ -12,10 +12,11 @@
   Benign, while preserving explicit Shadow and Warn mode behavior and existing
   malicious-prediction enforcement.
 - Adds an immutable, caller-configured MCP resolver for `mcp__` and `MCP:`
-  dispatch names. Resolution matches complete configured server and tool
-  identities, including IDs that contain dispatch separators, and the
-  hyphen-to-underscore host alias. Distinct exact and alias candidates for one
-  raw name are ambiguous. A typed canonical resource bypasses this resolver.
+  dispatch names. A full tool catalog matches complete server/tool spellings.
+  A server-only catalog derives the tool ID from the nonempty remainder after
+  a configured server or alias prefix, including nested separators. Exact and
+  alias candidates are equal, and distinct candidates are ambiguous. A typed
+  canonical resource bypasses this resolver.
 - Vendors and verifies governance identity contract 1.0.0, including exact
   artifact digests and all matching vectors.
 

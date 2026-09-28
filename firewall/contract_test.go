@@ -4,6 +4,7 @@ package firewall
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -61,6 +62,31 @@ func TestFrozenGovernanceContractDigests(t *testing.T) {
 			t.Fatalf("%s digest = %s, want %s", name, got, want)
 		}
 	}
+}
+
+func TestGovernanceDispatchContractVectors(t *testing.T) {
+	contents, err := os.ReadFile(filepath.Join(governanceContractDir(t), "matching.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(contents, &raw); err != nil {
+		t.Fatal(err)
+	}
+	payload, ok := raw["mcp_dispatch_cases"]
+	if !ok || len(bytes.TrimSpace(payload)) == 0 || string(bytes.TrimSpace(payload)) == "null" {
+		t.Skip("vendored contract has no mcp_dispatch_cases; resolver tests cover dispatch semantics until the corpus is synchronized")
+	}
+	var cases []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(payload, &cases); err != nil {
+		t.Fatalf("mcp_dispatch_cases are present but not an array: %v", err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("mcp_dispatch_cases is empty")
+	}
+	t.Fatalf("mcp_dispatch_cases has %d entries but no published case schema is vendored yet", len(cases))
 }
 
 func TestGovernanceMatchingContractVectors(t *testing.T) {
