@@ -401,8 +401,8 @@ func TestClassifyBatchSerializesMetadata(t *testing.T) {
 
 	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
 	metadata := []ClassificationMetadata{
-		{"langgraph": map[string]any{"run_id": "run-a"}},
-		nil,
+		{"langgraph": map[string]any{"run_id": "run-a"}, "silmaril": map[string]any{"agent_model_id": "provider/model-a"}},
+		{"silmaril": map[string]any{"agent_model_id": "provider/model-b"}},
 	}
 	if _, err := fw.ClassifyBatch(context.Background(), []string{"a", "b"},
 		WithBatchMetadata(metadata),
@@ -415,10 +415,16 @@ func TestClassifyBatchSerializesMetadata(t *testing.T) {
 	}
 	index0, index1 := 0, 1
 	requireSilmarilMetadata(t, gotPayload.Metadata[0], "req-batch-meta", &index0)
+	if got := (*gotPayload.Metadata[0])["silmaril"].(map[string]any)["agent_model_id"]; got != "provider/model-a" {
+		t.Fatalf("metadata[0] agent_model_id = %#v", got)
+	}
 	if !reflect.DeepEqual((*gotPayload.Metadata[0])["langgraph"], metadata[0]["langgraph"]) {
 		t.Fatalf("metadata[0] langgraph = %#v, want %#v", (*gotPayload.Metadata[0])["langgraph"], metadata[0]["langgraph"])
 	}
 	requireSilmarilMetadata(t, gotPayload.Metadata[1], "req-batch-meta", &index1)
+	if got := (*gotPayload.Metadata[1])["silmaril"].(map[string]any)["agent_model_id"]; got != "provider/model-b" {
+		t.Fatalf("metadata[1] agent_model_id = %#v", got)
+	}
 }
 
 func TestClassifyBatchDoesNotSendThresholds(t *testing.T) {

@@ -38,7 +38,8 @@ type BlockResult struct {
 }
 
 // ClassificationMetadata carries caller-provided request metadata alongside
-// the classified text without embedding it in the text itself.
+// the classified text without embedding it in the text itself. Set
+// metadata.silmaril.agent_model_id to the selected agent model ID when known.
 type ClassificationMetadata map[string]any
 
 // Options configures a Firewall client. APIKey and APIURL are required.
@@ -131,6 +132,7 @@ func WithBatchToolNames(names []string) BatchClassifyOption {
 }
 
 // WithBatchMetadata sets one metadata object per text. Length must match texts.
+// Each item can have a different metadata.silmaril.agent_model_id.
 // A nil metadata entry is serialized as null for that text. Do not mutate the
 // slice or its maps while that ClassifyBatch call is in flight.
 func WithBatchMetadata(metadata []ClassificationMetadata) BatchClassifyOption {
