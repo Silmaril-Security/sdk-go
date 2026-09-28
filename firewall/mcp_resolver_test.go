@@ -373,6 +373,34 @@ func TestMCPServerCatalogResolvesNestedToolID(t *testing.T) {
 	}
 }
 
+func TestMCPServerCatalogRejectsInvalidToolSuffix(t *testing.T) {
+	resolver, err := NewMCPCatalogResolver(MCPCatalog{
+		Servers: []Resource{{Kind: ResourceKindMCPServer, ID: "server"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dispatch := range []string{
+		"mcp__server__   ",
+		"mcp__server__\t",
+		"MCP:server:   ",
+		"mcp__server__",
+	} {
+		resolution := resolver.Resolve(dispatch)
+		if resolution.Status != MCPResolutionUnresolved || resolution.Resource != nil {
+			t.Fatalf("%q resolution = %+v", dispatch, resolution)
+		}
+	}
+	nested := resolver.Resolve("mcp__server__search__papers")
+	if nested.Status != MCPResolutionResolved || nested.Resource == nil ||
+		nested.Resource.ParentID != "server" || nested.Resource.ID != "search__papers" {
+		t.Fatalf("separator tool id = %+v", nested)
+	}
+	if err := nested.Resource.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMCPServerCatalogOverlappingIDsAreAmbiguous(t *testing.T) {
 	resolver, err := NewMCPCatalogResolver(MCPCatalog{
 		Servers: []Resource{
@@ -474,6 +502,10 @@ func TestNewMCPResolverValidatesConfiguredCatalog(t *testing.T) {
 		{
 			name:       "invalid mcp tool",
 			configured: []Resource{{Kind: ResourceKindMCPTool, ID: "search"}},
+		},
+		{
+			name:       "whitespace tool id",
+			configured: []Resource{{Kind: ResourceKindMCPTool, ID: "   ", ParentID: "server"}},
 		},
 		{
 			name: "duplicate",

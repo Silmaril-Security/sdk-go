@@ -319,8 +319,9 @@ Configured server and tool IDs may contain those separators.
 `NewMCPResolver` takes a full tool catalog and enumerates complete server/tool
 spellings. `NewMCPCatalogResolver` accepts that same tool list, or server IDs
 alone. With server IDs only, every separator-bounded configured server ID or
-alias is a prefix, and the entire nonempty remainder is the tool ID. Aliases
-are the hyphen-to-underscore spelling of each configured server plus any
+alias is a prefix, and the remainder is the tool ID when it is a valid resource
+ID, including an ID that contains `__` or `:`. Aliases are the
+hyphen-to-underscore spelling of each configured server plus any
 `MCPServerAlias` values. Exact and alias candidates are equal. One distinct
 canonical resource resolves; more than one is ambiguous. A caller that already
 has the typed canonical resource passes it with `WithResource` and does not use
@@ -342,24 +343,18 @@ if resolution.Status != firewall.MCPResolutionResolved {
     return
 }
 
-serverResolver, err := firewall.NewMCPCatalogResolver(firewall.MCPCatalog{
-    Servers: []firewall.Resource{{
-        Kind: firewall.ResourceKindMCPServer,
-        ID:   "prod__west",
-    }},
-})
-if err != nil {
-    log.Fatal(err)
-}
-nested := serverResolver.Resolve("mcp__prod__west__search__papers")
-_ = nested
-
 _, err = fw.Classify(ctx, text,
     firewall.WithToolName("mcp__arxiv_mcp_server__search_papers"),
     firewall.WithResource(*resolution.Resource),
     firewall.WithIdentityRevision(identityRevision),
 )
 ```
+
+The typed canonical resource on that call stays authoritative over the raw
+dispatch spelling. Deploy compatible Firewall readers before clients send
+`resource` or `identity_revision`. Keep existing policies on their current
+schema until every enforcement consumer in the target scope is verified
+against contract 1.0.0, then explicitly activate runtime schema 6.
 
 ## Hook labels
 

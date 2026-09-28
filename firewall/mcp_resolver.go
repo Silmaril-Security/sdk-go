@@ -61,8 +61,9 @@ func NewMCPResolver(configured []Resource) (*MCPResolver, error) {
 
 // NewMCPCatalogResolver constructs a resolver from a full tool catalog or a
 // server-only catalog. A full tool catalog matches complete server/tool
-// spellings. A server-only catalog matches every separator-bounded configured
-// server ID or alias and uses the entire nonempty remainder as the tool ID.
+// spellings and validates every configured ID at construction. A server-only
+// catalog matches every separator-bounded configured server ID or alias and
+// uses the remainder as the tool ID when that remainder is a valid resource ID.
 func NewMCPCatalogResolver(catalog MCPCatalog) (*MCPResolver, error) {
 	if len(catalog.Tools) > 0 && len(catalog.Servers) > 0 {
 		return nil, fmt.Errorf("firewall: MCP catalog must contain tools or servers, not both")
@@ -137,7 +138,8 @@ func NewMCPCatalogResolver(catalog MCPCatalog) (*MCPResolver, error) {
 // tool identities may themselves contain the dispatch separator. A full tool
 // catalog enumerates complete server/tool spellings. A server-only catalog
 // takes every separator-bounded configured server ID or alias prefix and uses
-// the entire nonempty remainder, including further separators, as the tool ID.
+// the remainder, including further separators, as the tool ID when that
+// remainder passes resource ID validation.
 // Exact and alias spellings are equal candidates. Identical canonical resources
 // are deduplicated. One remaining candidate resolves; more than one is
 // ambiguous; none is unresolved. Callers that already hold a typed canonical
@@ -189,14 +191,15 @@ func (r *MCPResolver) serverCandidates(body, separator string) []Resource {
 				continue
 			}
 			toolID := body[len(prefix):]
-			if toolID == "" {
-				continue
-			}
-			matches = append(matches, Resource{
+			candidate := Resource{
 				Kind:     ResourceKindMCPTool,
 				ID:       toolID,
 				ParentID: serverID,
-			})
+			}
+			if err := candidate.Validate(); err != nil {
+				continue
+			}
+			matches = append(matches, candidate)
 		}
 	}
 	return matches
