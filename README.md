@@ -315,10 +315,12 @@ For MCP host dispatch names, construct `MCPResolver` from the configured tool
 catalog already held by the adapter. The resolver performs no configuration
 discovery. It recognizes `mcp__<server>__<tool>` and
 `MCP:<server>:<tool>`. Configured server and tool IDs may contain those
-separators; resolution compares the complete configured identities before
-applying a unique host alias formed by replacing configured-server hyphens with
-underscores. Overlapping interpretations are ambiguous. Tool identities remain
-exact and case-sensitive.
+separators. Resolution gathers every complete configured spelling, including
+the alias formed by replacing hyphens in a configured server ID with
+underscores. One distinct canonical resource resolves. Distinct exact and alias
+candidates for the same raw name are ambiguous. A caller that already has the
+typed canonical resource passes it with `WithResource` and does not use this
+resolver. Tool identities remain case-sensitive.
 
 ```go
 resolver, err := firewall.NewMCPResolver([]firewall.Resource{{

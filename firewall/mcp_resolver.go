@@ -66,13 +66,13 @@ func NewMCPResolver(configured []Resource) (*MCPResolver, error) {
 }
 
 // Resolve recognizes mcp__<server>__<tool> and MCP:<server>:<tool>. Server and
-// tool identities may themselves contain the dispatch separator. Exact
-// configured identities are compared first. A unique host alias, formed by
-// replacing hyphens in the configured server identity with underscores, is
-// used only when no exact interpretation exists. A server identity participates
-// in that alias step only when it contains a hyphen and its complete alias
-// spelling equals the dispatch name. Multiple complete interpretations are
-// ambiguous.
+// tool identities may themselves contain the dispatch separator. It collects
+// every complete configured spelling, including a host alias formed by
+// replacing hyphens in a configured server identity with underscores. A server
+// contributes an alias spelling only when it contains a hyphen. Identical
+// canonical resources are deduplicated. One remaining candidate resolves; more
+// than one is ambiguous; none is unresolved. Callers that already hold a typed
+// canonical resource use WithResource instead of this raw-name resolver.
 func (r *MCPResolver) Resolve(dispatchName string) MCPResolution {
 	if r == nil {
 		return MCPResolution{Status: MCPResolutionUnresolved}
@@ -81,22 +81,12 @@ func (r *MCPResolver) Resolve(dispatchName string) MCPResolution {
 	if !ok {
 		return MCPResolution{Status: MCPResolutionUnresolved}
 	}
-	exact := matchingTools(r.tools, body, separator, false)
-	switch len(exact) {
+	matches := matchingTools(r.tools, body, separator, false)
+	matches = append(matches, matchingTools(r.tools, body, separator, true)...)
+	unique := dedupeCanonicalResources(matches)
+	switch len(unique) {
 	case 1:
-		return resolvedMCPResource(exact[0])
-	default:
-		if len(exact) > 1 {
-			return MCPResolution{Status: MCPResolutionAmbiguous}
-		}
-	}
-	if exactServerPrefix(r.tools, body, separator) {
-		return MCPResolution{Status: MCPResolutionUnresolved}
-	}
-	aliases := matchingTools(r.tools, body, separator, true)
-	switch len(aliases) {
-	case 1:
-		return resolvedMCPResource(aliases[0])
+		return resolvedMCPResource(unique[0])
 	case 0:
 		return MCPResolution{Status: MCPResolutionUnresolved}
 	default:
@@ -121,18 +111,18 @@ func matchingTools(tools []Resource, body, separator string, alias bool) []Resou
 	return matches
 }
 
-func exactServerPrefix(tools []Resource, body, separator string) bool {
-	seen := make(map[string]struct{})
-	for _, tool := range tools {
-		if _, ok := seen[tool.ParentID]; ok {
+func dedupeCanonicalResources(matches []Resource) []Resource {
+	seen := make(map[mcpDispatchKey]struct{}, len(matches))
+	unique := make([]Resource, 0, len(matches))
+	for _, match := range matches {
+		key := mcpDispatchKey{host: match.ParentID, tool: match.ID}
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[tool.ParentID] = struct{}{}
-		if strings.HasPrefix(body, tool.ParentID+separator) {
-			return true
-		}
+		seen[key] = struct{}{}
+		unique = append(unique, match)
 	}
-	return false
+	return unique
 }
 
 func resolvedMCPResource(resource Resource) MCPResolution {

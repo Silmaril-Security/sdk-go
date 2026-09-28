@@ -13,9 +13,9 @@
   malicious-prediction enforcement.
 - Adds an immutable, caller-configured MCP resolver for `mcp__` and `MCP:`
   dispatch names. Resolution matches complete configured server and tool
-  identities, including IDs that contain dispatch separators, then applies a
-  unique host alias. Overlapping interpretations and alias collisions are
-  ambiguous.
+  identities, including IDs that contain dispatch separators, and the
+  hyphen-to-underscore host alias. Distinct exact and alias candidates for one
+  raw name are ambiguous. A typed canonical resource bypasses this resolver.
 - Vendors and verifies governance identity contract 1.0.0, including exact
   artifact digests and all matching vectors.
 

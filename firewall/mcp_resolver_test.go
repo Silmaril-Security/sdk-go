@@ -61,20 +61,26 @@ func TestMCPResolverExactAndUniqueAlias(t *testing.T) {
 	}
 }
 
-func TestMCPResolverExactConfiguredIdentityPrecedesAlias(t *testing.T) {
+func TestMCPResolverExactAndAliasSpellingsCollide(t *testing.T) {
 	resolver, err := NewMCPResolver([]Resource{
-		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "server-name"},
-		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "server_name"},
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "git_hub"},
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "git-hub"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolution := resolver.Resolve("mcp__server_name__search")
-	if resolution.Status != MCPResolutionResolved || resolution.Resource == nil {
-		t.Fatalf("resolution = %+v", resolution)
+	for _, dispatch := range []string{
+		"mcp__git_hub__search",
+		"MCP:git_hub:search",
+	} {
+		resolution := resolver.Resolve(dispatch)
+		if resolution.Status != MCPResolutionAmbiguous || resolution.Resource != nil {
+			t.Fatalf("%q resolution = %+v", dispatch, resolution)
+		}
 	}
-	if resolution.Resource.ParentID != "server_name" {
-		t.Fatalf("parent = %q, want exact configured server_name", resolution.Resource.ParentID)
+	hyphenated := resolver.Resolve("mcp__git-hub__search")
+	if hyphenated.Status != MCPResolutionResolved || hyphenated.Resource == nil || hyphenated.Resource.ParentID != "git-hub" {
+		t.Fatalf("hyphenated exact resolution = %+v", hyphenated)
 	}
 }
 
@@ -127,9 +133,9 @@ func TestMCPResolverServerWithoutHyphenStaysExactOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exact := resolver.Resolve("mcp__server_name__search")
-	if exact.Status != MCPResolutionResolved || exact.Resource == nil || exact.Resource.ParentID != "server_name" {
-		t.Fatalf("exact resolution = %+v", exact)
+	shared := resolver.Resolve("mcp__server_name__search")
+	if shared.Status != MCPResolutionAmbiguous || shared.Resource != nil {
+		t.Fatalf("shared exact and alias resolution = %+v", shared)
 	}
 	hyphenDispatch := resolver.Resolve("mcp__server-name__search")
 	if hyphenDispatch.Status != MCPResolutionResolved || hyphenDispatch.Resource == nil || hyphenDispatch.Resource.ParentID != "server-name" {
@@ -234,7 +240,7 @@ func TestMCPResolverMatchesConfiguredIDsContainingSeparators(t *testing.T) {
 	}
 }
 
-func TestMCPResolverExactSeparatorIdentityPrecedesAlias(t *testing.T) {
+func TestMCPResolverSeparatorExactAndAliasSpellingsCollide(t *testing.T) {
 	resolver, err := NewMCPResolver([]Resource{
 		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "prod__west-1"},
 		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "prod__west_1"},
@@ -243,11 +249,8 @@ func TestMCPResolverExactSeparatorIdentityPrecedesAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolution := resolver.Resolve("mcp__prod__west_1__search")
-	if resolution.Status != MCPResolutionResolved || resolution.Resource == nil {
+	if resolution.Status != MCPResolutionAmbiguous || resolution.Resource != nil {
 		t.Fatalf("resolution = %+v", resolution)
-	}
-	if resolution.Resource.ParentID != "prod__west_1" {
-		t.Fatalf("parent = %q, want exact prod__west_1", resolution.Resource.ParentID)
 	}
 	aliasOnly, err := NewMCPResolver([]Resource{
 		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "prod__west-1"},
