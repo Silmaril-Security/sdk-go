@@ -40,6 +40,8 @@ type BlockResult struct {
 // ClassificationMetadata carries caller-provided request metadata alongside
 // the classified text without embedding it in the text itself. Set
 // metadata.silmaril.agent_model_id to the selected agent model ID when known.
+// Omit agent_model_id when the caller cannot attribute a model to this item;
+// trace readers expose that unknown value as null.
 type ClassificationMetadata map[string]any
 
 // Options configures a Firewall client. APIKey and APIURL are required.
