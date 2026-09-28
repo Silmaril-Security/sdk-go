@@ -330,8 +330,10 @@ caller that already has the typed canonical resource passes it with
 `WithResource` and does not use this resolver. Tool identities remain
 case-sensitive.
 
-Unresolved and ambiguous results are fail-closed: do not dispatch the call or
-send a guessed resource. Pass a typed canonical resource with `WithResource`
+For unresolved or ambiguous results, do not send a guessed resource. In Block
+mode, stop the affected call before dispatch and report incomplete protection.
+In Shadow and Warn modes, retain the mode's dispatch behavior and report
+incomplete protection. Pass a typed canonical resource with `WithResource`
 or `WithBatchResources`, and pass the actual catalog revision with
 `WithIdentityRevision` or `WithBatchIdentityRevision`. Deploy compatible
 Firewall readers before clients send `resource` or `identity_revision`. Keep
