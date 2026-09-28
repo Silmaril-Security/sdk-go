@@ -330,34 +330,14 @@ caller that already has the typed canonical resource passes it with
 `WithResource` and does not use this resolver. Tool identities remain
 case-sensitive.
 
-```go
-resolver, err := firewall.NewMCPResolver([]firewall.Resource{{
-    Kind:     firewall.ResourceKindMCPTool,
-    ID:       "search_papers",
-    ParentID: "arxiv-mcp-server",
-}})
-if err != nil {
-    log.Fatal(err)
-}
-
-resolution := resolver.Resolve("mcp__arxiv_mcp_server__search_papers")
-if resolution.Status != firewall.MCPResolutionResolved {
-    // Handle MCPResolutionUnresolved or MCPResolutionAmbiguous explicitly.
-    return
-}
-
-_, err = fw.Classify(ctx, text,
-    firewall.WithToolName("mcp__arxiv_mcp_server__search_papers"),
-    firewall.WithResource(*resolution.Resource),
-    firewall.WithIdentityRevision(identityRevision),
-)
-```
-
-The typed canonical resource on that call stays authoritative over the raw
-dispatch spelling. Deploy compatible Firewall readers before clients send
-`resource` or `identity_revision`. Keep existing policies on their current
-schema until every enforcement consumer in the target scope is verified
-against contract 1.0.0, then explicitly activate runtime schema 6.
+Unresolved and ambiguous results are fail-closed: do not dispatch the call or
+send a guessed resource. Pass a typed canonical resource with `WithResource`
+or `WithBatchResources`, and pass the actual catalog revision with
+`WithIdentityRevision` or `WithBatchIdentityRevision`. Deploy compatible
+Firewall readers before clients send `resource` or `identity_revision`. Keep
+existing policies on their current schema until every enforcement consumer in
+the target scope is verified against contract 1.0.0, then explicitly activate
+runtime schema 6.
 
 ## Hook labels
 
