@@ -4,10 +4,12 @@ package firewall
 
 import (
 	"bufio"
-	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -16,10 +18,10 @@ import (
 )
 
 var frozenGovernanceContractDigests = map[string]string{
-	"README.md":            "64ea16e79e334cbb9f53e2cbf586ed1d44aad5748532ff6b74333ae90df82649",
-	"matching.json":        "973791d36f678ac024cd6bd912b36fd8728d3b563a6e8139f1b31fcc9ae3577e",
+	"README.md":            "b26ba42b2d8bf4caa7c65cb910d8f4fee3837ec3f7130e881e542a235b341615",
+	"matching.json":        "7589f5d327a76878a8904b9543a0c5011218865842069a0cd70612f14fe34e91",
 	"resource.schema.json": "b9ed2d0218aaca5ee741aa3bd544849fd61b4888bbf77ed4854684e64665ed84",
-	"SHA256SUMS":           "d297f514a958236fcf1b0036888a63cd18a3be2c44be913c377b710efd481243",
+	"SHA256SUMS":           "e7618661bbd0b969833a1512ae19a3ee57835186c520b4874b7c65159cb2d7e2",
 }
 
 func TestFrozenGovernanceContractDigests(t *testing.T) {
@@ -69,24 +71,161 @@ func TestGovernanceDispatchContractVectors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(contents, &raw); err != nil {
+	var vectors struct {
+		Cases []governanceDispatchCase `json:"mcp_dispatch_cases"`
+	}
+	if err := json.Unmarshal(contents, &vectors); err != nil {
 		t.Fatal(err)
 	}
-	payload, ok := raw["mcp_dispatch_cases"]
-	if !ok || len(bytes.TrimSpace(payload)) == 0 || string(bytes.TrimSpace(payload)) == "null" {
-		t.Skip("vendored contract has no mcp_dispatch_cases; resolver tests cover dispatch semantics until the corpus is synchronized")
+	if len(vectors.Cases) != 19 {
+		t.Fatalf("mcp_dispatch_cases = %d, want 19", len(vectors.Cases))
 	}
-	var cases []struct {
-		Name string `json:"name"`
+	seen := map[string]struct{}{}
+	for _, vector := range vectors.Cases {
+		vector := vector
+		if _, ok := seen[vector.Name]; ok {
+			t.Fatalf("duplicate mcp_dispatch_cases name %q", vector.Name)
+		}
+		seen[vector.Name] = struct{}{}
+		t.Run(vector.Name, func(t *testing.T) {
+			resolver, err := resolverFromDispatchCatalog(vector.Catalog)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if vector.Authoritative != nil {
+				assertAuthoritativeDispatchResource(t, resolver, vector)
+				return
+			}
+			assertDispatchResolution(t, resolver.Resolve(vector.RawName), vector)
+		})
 	}
-	if err := json.Unmarshal(payload, &cases); err != nil {
-		t.Fatalf("mcp_dispatch_cases are present but not an array: %v", err)
+}
+
+type governanceDispatchCase struct {
+	Name          string                    `json:"name"`
+	RawName       string                    `json:"raw_name"`
+	Authoritative *contractResource         `json:"authoritative_resource"`
+	Catalog       governanceDispatchCatalog `json:"catalog"`
+	Result        *contractResource         `json:"result"`
+	Failure       *string                   `json:"failure"`
+}
+
+type governanceDispatchCatalog struct {
+	Servers []struct {
+		ID      string   `json:"id"`
+		Aliases []string `json:"aliases"`
+	} `json:"servers"`
+	Tools []struct {
+		ID       string `json:"id"`
+		ParentID string `json:"parent_id"`
+	} `json:"tools"`
+}
+
+func resolverFromDispatchCatalog(catalog governanceDispatchCatalog) (*MCPResolver, error) {
+	aliases := make([]MCPServerAlias, 0)
+	for _, server := range catalog.Servers {
+		for _, alias := range server.Aliases {
+			aliases = append(aliases, MCPServerAlias{ServerID: server.ID, Alias: alias})
+		}
 	}
-	if len(cases) == 0 {
-		t.Fatal("mcp_dispatch_cases is empty")
+	if len(catalog.Tools) > 0 {
+		tools := make([]Resource, 0, len(catalog.Tools))
+		for _, tool := range catalog.Tools {
+			tools = append(tools, Resource{
+				Kind:     ResourceKindMCPTool,
+				ID:       tool.ID,
+				ParentID: tool.ParentID,
+			})
+		}
+		return NewMCPCatalogResolver(MCPCatalog{Tools: tools, Aliases: aliases})
 	}
-	t.Fatalf("mcp_dispatch_cases has %d entries but no published case schema is vendored yet", len(cases))
+	servers := make([]Resource, 0, len(catalog.Servers))
+	for _, server := range catalog.Servers {
+		servers = append(servers, Resource{Kind: ResourceKindMCPServer, ID: server.ID})
+	}
+	return NewMCPCatalogResolver(MCPCatalog{Servers: servers, Aliases: aliases})
+}
+
+func assertDispatchResolution(t *testing.T, resolution MCPResolution, vector governanceDispatchCase) {
+	t.Helper()
+	switch {
+	case vector.Failure == nil && vector.Result != nil:
+		want := vector.Result.concrete()
+		if resolution.Status != MCPResolutionResolved || resolution.Resource == nil {
+			t.Fatalf("resolution = %+v, want %+v", resolution, want)
+		}
+		if resolution.Resource.Kind != want.Kind || resolution.Resource.ID != want.ID || resolution.Resource.ParentID != want.ParentID {
+			t.Fatalf("resource = %+v, want %+v", resolution.Resource, want)
+		}
+		if err := resolution.Resource.Validate(); err != nil {
+			t.Fatal(err)
+		}
+	case vector.Failure != nil && vector.Result == nil:
+		var want MCPResolutionStatus
+		switch *vector.Failure {
+		case "ambiguous":
+			want = MCPResolutionAmbiguous
+		case "unresolved":
+			want = MCPResolutionUnresolved
+		default:
+			t.Fatalf("unknown failure %q", *vector.Failure)
+		}
+		if resolution.Status != want || resolution.Resource != nil {
+			t.Fatalf("resolution = %+v, want %s", resolution, want)
+		}
+	default:
+		t.Fatalf("case %q must set exactly one of result or failure", vector.Name)
+	}
+}
+
+func assertAuthoritativeDispatchResource(t *testing.T, resolver *MCPResolver, vector governanceDispatchCase) {
+	t.Helper()
+	if vector.Result == nil || vector.Failure != nil {
+		t.Fatal("authoritative resource requires a resolved result")
+	}
+	want := vector.Authoritative.concrete()
+	if got := vector.Result.concrete(); got.Kind != want.Kind || got.ID != want.ID || got.ParentID != want.ParentID {
+		t.Fatalf("result = %+v, authoritative = %+v", got, want)
+	}
+	raw := resolver.Resolve(vector.RawName)
+	if raw.Status != MCPResolutionAmbiguous || raw.Resource != nil {
+		t.Fatalf("raw dispatch resolution = %+v, want ambiguous before the typed resource", raw)
+	}
+
+	var sent map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&sent); err != nil {
+			t.Error(err)
+		}
+		_ = json.NewEncoder(w).Encode(singleResponse{
+			Prediction: PredictionBenign,
+			Score:      0.1,
+			Threshold:  0.5,
+			Mode:       ModeWarn,
+		})
+	}))
+	defer ts.Close()
+	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Classify(context.Background(), "dispatch",
+		WithMode(ModeWarn),
+		WithToolName(vector.RawName),
+		WithResource(want),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if sent["tool_name"] != vector.RawName {
+		t.Fatalf("tool_name = %#v, want %q", sent["tool_name"], vector.RawName)
+	}
+	resource, ok := sent["resource"].(map[string]any)
+	if !ok {
+		t.Fatalf("resource = %#v", sent["resource"])
+	}
+	if resource["kind"] != string(want.Kind) || resource["id"] != want.ID || resource["parent_id"] != want.ParentID {
+		t.Fatalf("resource = %#v, want %+v", resource, want)
+	}
 }
 
 func TestGovernanceMatchingContractVectors(t *testing.T) {
