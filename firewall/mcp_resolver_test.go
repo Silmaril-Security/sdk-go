@@ -78,7 +78,7 @@ func TestMCPResolverExactConfiguredIdentityPrecedesAlias(t *testing.T) {
 	}
 }
 
-func TestMCPResolverReportsAmbiguousAlias(t *testing.T) {
+func TestMCPResolverDistinctToolsDoNotCollideOnSharedAliasHost(t *testing.T) {
 	resolver, err := NewMCPResolver([]Resource{
 		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "server-name_x"},
 		{Kind: ResourceKindMCPTool, ID: "create", ParentID: "server_name-x"},
@@ -91,7 +91,63 @@ func TestMCPResolverReportsAmbiguousAlias(t *testing.T) {
 		"MCP:server_name_x:search",
 	} {
 		resolution := resolver.Resolve(dispatch)
+		if resolution.Status != MCPResolutionResolved || resolution.Resource == nil {
+			t.Fatalf("%q resolution = %+v", dispatch, resolution)
+		}
+		if resolution.Resource.ParentID != "server-name_x" || resolution.Resource.ID != "search" {
+			t.Fatalf("%q resource = %+v", dispatch, resolution.Resource)
+		}
+	}
+}
+
+func TestMCPResolverCompleteAliasSpellingsStayAmbiguous(t *testing.T) {
+	resolver, err := NewMCPResolver([]Resource{
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "foo-bar-baz"},
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "foo_bar-baz"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dispatch := range []string{
+		"mcp__foo_bar_baz__search",
+		"MCP:foo_bar_baz:search",
+	} {
+		resolution := resolver.Resolve(dispatch)
 		if resolution.Status != MCPResolutionAmbiguous || resolution.Resource != nil {
+			t.Fatalf("%q resolution = %+v", dispatch, resolution)
+		}
+	}
+}
+
+func TestMCPResolverServerWithoutHyphenStaysExactOnly(t *testing.T) {
+	resolver, err := NewMCPResolver([]Resource{
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "server_name"},
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "server-name"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exact := resolver.Resolve("mcp__server_name__search")
+	if exact.Status != MCPResolutionResolved || exact.Resource == nil || exact.Resource.ParentID != "server_name" {
+		t.Fatalf("exact resolution = %+v", exact)
+	}
+	hyphenDispatch := resolver.Resolve("mcp__server-name__search")
+	if hyphenDispatch.Status != MCPResolutionResolved || hyphenDispatch.Resource == nil || hyphenDispatch.Resource.ParentID != "server-name" {
+		t.Fatalf("hyphenated exact resolution = %+v", hyphenDispatch)
+	}
+
+	exactOnly, err := NewMCPResolver([]Resource{
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "server_name"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dispatch := range []string{
+		"mcp__server-name__search",
+		"MCP:server-name:search",
+	} {
+		resolution := exactOnly.Resolve(dispatch)
+		if resolution.Status != MCPResolutionUnresolved || resolution.Resource != nil {
 			t.Fatalf("%q resolution = %+v", dispatch, resolution)
 		}
 	}

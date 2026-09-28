@@ -69,8 +69,10 @@ func NewMCPResolver(configured []Resource) (*MCPResolver, error) {
 // tool identities may themselves contain the dispatch separator. Exact
 // configured identities are compared first. A unique host alias, formed by
 // replacing hyphens in the configured server identity with underscores, is
-// used only when no exact interpretation exists. Multiple interpretations or
-// alias collisions are ambiguous.
+// used only when no exact interpretation exists. A server identity participates
+// in that alias step only when it contains a hyphen and its complete alias
+// spelling equals the dispatch name. Multiple complete interpretations are
+// ambiguous.
 func (r *MCPResolver) Resolve(dispatchName string) MCPResolution {
 	if r == nil {
 		return MCPResolution{Status: MCPResolutionUnresolved}
@@ -94,9 +96,6 @@ func (r *MCPResolver) Resolve(dispatchName string) MCPResolution {
 	aliases := matchingTools(r.tools, body, separator, true)
 	switch len(aliases) {
 	case 1:
-		if aliasHostCollides(r.tools, aliases[0].ParentID) {
-			return MCPResolution{Status: MCPResolutionAmbiguous}
-		}
 		return resolvedMCPResource(aliases[0])
 	case 0:
 		return MCPResolution{Status: MCPResolutionUnresolved}
@@ -130,19 +129,6 @@ func exactServerPrefix(tools []Resource, body, separator string) bool {
 		}
 		seen[tool.ParentID] = struct{}{}
 		if strings.HasPrefix(body, tool.ParentID+separator) {
-			return true
-		}
-	}
-	return false
-}
-
-func aliasHostCollides(tools []Resource, parentID string) bool {
-	alias := strings.ReplaceAll(parentID, "-", "_")
-	for _, tool := range tools {
-		if tool.ParentID == parentID {
-			continue
-		}
-		if strings.ReplaceAll(tool.ParentID, "-", "_") == alias {
 			return true
 		}
 	}
