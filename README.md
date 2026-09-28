@@ -317,15 +317,18 @@ discovery. It recognizes `mcp__<server>__<tool>` and `MCP:<server>:<tool>`.
 Configured server and tool IDs may contain those separators.
 
 `NewMCPResolver` takes a full tool catalog and enumerates complete server/tool
-spellings. `NewMCPCatalogResolver` accepts that same tool list, or server IDs
-alone. With server IDs only, every separator-bounded configured server ID or
-alias is a prefix, and the remainder is the tool ID when it is a valid resource
-ID, including an ID that contains `__` or `:`. Aliases are the
-hyphen-to-underscore spelling of each configured server plus any
-`MCPServerAlias` values. Exact and alias candidates are equal. One distinct
-canonical resource resolves; more than one is ambiguous. A caller that already
-has the typed canonical resource passes it with `WithResource` and does not use
-this resolver. Tool identities remain case-sensitive.
+spellings. Each tool parent is configured for that call. `NewMCPCatalogResolver`
+keeps that behavior for a tool list alone. Server IDs alone use every
+separator-bounded configured server ID or alias as a prefix, and the remainder
+is the tool ID when it is a valid resource ID, including an ID that contains
+`__` or `:`. A whitespace-only remainder stays unresolved. Supplying servers and
+tools together still matches complete spellings, but only tools whose parent is
+one of those servers participate; a tool row for any other parent is ignored.
+Aliases bind only to the configured servers. Exact and alias candidates are
+equal. One distinct canonical resource resolves; more than one is ambiguous. A
+caller that already has the typed canonical resource passes it with
+`WithResource` and does not use this resolver. Tool identities remain
+case-sensitive.
 
 ```go
 resolver, err := firewall.NewMCPResolver([]firewall.Resource{{

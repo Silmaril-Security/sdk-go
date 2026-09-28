@@ -12,12 +12,14 @@
   Benign, while preserving explicit Shadow and Warn mode behavior and existing
   malicious-prediction enforcement.
 - Adds an immutable, caller-configured MCP resolver for `mcp__` and `MCP:`
-  dispatch names. A full tool catalog matches complete server/tool spellings.
-  A server-only catalog derives the tool ID from the remainder after a
-  configured server or alias prefix when that remainder is a valid resource
-  ID, including nested separators. Exact and
-  alias candidates are equal, and distinct candidates are ambiguous. A typed
-  canonical resource bypasses this resolver.
+  dispatch names. A tool list matches complete server/tool spellings, and its
+  parents stay configured when no server list is supplied. A server-only
+  catalog derives the tool ID from the remainder after a configured server or
+  alias prefix when that remainder is a valid resource ID, including nested
+  separators. Servers and tools together anchor the tool catalog to the listed
+  servers and ignore any other tool parent. Exact and alias candidates are
+  equal, and distinct candidates are ambiguous. A typed canonical resource
+  bypasses this resolver.
 - Vendors and verifies governance identity contract 1.0.0, including exact
   artifact digests and all matching vectors.
 

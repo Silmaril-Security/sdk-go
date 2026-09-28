@@ -34,20 +34,39 @@ type MCPServerAlias struct {
 	Alias    string
 }
 
-// MCPCatalog is a caller-supplied MCP dispatch catalog. Set Tools for a full
-// tool catalog, or Servers when only server IDs are known. Aliases add host
-// spellings for those configured server IDs. The resolver does not discover
-// or scrape configuration.
+// MCPCatalog is a caller-supplied MCP dispatch catalog. Tools alone form a full
+// tool catalog whose parents are implicit. Servers alone form a server-only
+// catalog. Servers and Tools together anchor that full tool catalog to the
+// listed servers and ignore tool rows whose parent is not listed. Aliases add
+// host spellings only for those configured server IDs. The resolver does not
+// discover or scrape configuration.
 type MCPCatalog struct {
 	Tools   []Resource
 	Servers []Resource
 	Aliases []MCPServerAlias
 }
 
+// mcpCatalogMode selects how a constructed catalog interprets dispatch names.
+// It is fixed at construction so a server list cannot by itself override a
+// full tool catalog.
+type mcpCatalogMode uint8
+
+const (
+	// mcpCatalogImplicitTools matches complete spellings. Each tool parent is
+	// a configured server even when no server row was supplied.
+	mcpCatalogImplicitTools mcpCatalogMode = iota
+	// mcpCatalogServersOnly derives the tool ID from a separator-bounded prefix.
+	mcpCatalogServersOnly
+	// mcpCatalogAnchoredTools matches complete spellings for tools whose parent
+	// is one of the explicit configured servers.
+	mcpCatalogAnchoredTools
+)
+
 // MCPResolver resolves host dispatch spellings against a caller-supplied,
 // immutable snapshot of configured MCP identities. It does not discover or
 // scrape configuration.
 type MCPResolver struct {
+	mode            mcpCatalogMode
 	tools           []Resource
 	servers         []string
 	explicitAliases map[string][]string
@@ -59,68 +78,39 @@ func NewMCPResolver(configured []Resource) (*MCPResolver, error) {
 	return NewMCPCatalogResolver(MCPCatalog{Tools: configured})
 }
 
-// NewMCPCatalogResolver constructs a resolver from a full tool catalog or a
-// server-only catalog. A full tool catalog matches complete server/tool
-// spellings and validates every configured ID at construction. A server-only
-// catalog matches every separator-bounded configured server ID or alias and
-// uses the remainder as the tool ID when that remainder is a valid resource ID.
+// NewMCPCatalogResolver constructs a resolver from one of three catalog shapes.
+// Tools alone, including NewMCPResolver, match complete spellings and treat
+// every tool parent as configured. Servers alone match every separator-bounded
+// configured server ID or alias and use the remainder as the tool ID when that
+// remainder is a valid resource ID. Servers and Tools together keep the full
+// tool-catalog match, but only for tools whose parent is one of the listed
+// servers; other tool rows are ignored and are not configured parents.
+// Configured IDs are validated at construction. Aliases bind only to those
+// configured servers.
 func NewMCPCatalogResolver(catalog MCPCatalog) (*MCPResolver, error) {
-	if len(catalog.Tools) > 0 && len(catalog.Servers) > 0 {
-		return nil, fmt.Errorf("firewall: MCP catalog must contain tools or servers, not both")
-	}
 	resolver := &MCPResolver{explicitAliases: map[string][]string{}}
-	known := map[string]struct{}{}
-	if len(catalog.Servers) > 0 {
-		resolver.servers = make([]string, 0, len(catalog.Servers))
-		for i, server := range catalog.Servers {
-			if err := server.Validate(); err != nil {
-				return nil, fmt.Errorf("firewall: configured MCP server %d: %w", i, err)
-			}
-			if server.Kind != ResourceKindMCPServer {
-				return nil, fmt.Errorf(
-					"firewall: configured MCP server %d has kind %q, want %q",
-					i,
-					server.Kind,
-					ResourceKindMCPServer,
-				)
-			}
-			if _, exists := known[server.ID]; exists {
-				return nil, fmt.Errorf("firewall: duplicate configured MCP server %q", server.ID)
-			}
-			known[server.ID] = struct{}{}
-			resolver.servers = append(resolver.servers, server.ID)
+	configured := map[string]struct{}{}
+	var err error
+	switch {
+	case len(catalog.Servers) > 0 && len(catalog.Tools) > 0:
+		resolver.mode = mcpCatalogAnchoredTools
+		resolver.servers, configured, err = configuredMCPServers(catalog.Servers)
+		if err != nil {
+			return nil, err
 		}
-	} else {
-		resolver.tools = make([]Resource, 0, len(catalog.Tools))
-		seenTools := map[mcpDispatchKey]struct{}{}
-		for i, resource := range catalog.Tools {
-			if err := resource.Validate(); err != nil {
-				return nil, fmt.Errorf("firewall: configured MCP resource %d: %w", i, err)
-			}
-			if resource.Kind != ResourceKindMCPTool {
-				return nil, fmt.Errorf(
-					"firewall: configured MCP resource %d has kind %q, want %q",
-					i,
-					resource.Kind,
-					ResourceKindMCPTool,
-				)
-			}
-			key := mcpDispatchKey{host: resource.ParentID, tool: resource.ID}
-			if _, exists := seenTools[key]; exists {
-				return nil, fmt.Errorf(
-					"firewall: duplicate configured MCP tool %q under server %q",
-					resource.ID,
-					resource.ParentID,
-				)
-			}
-			seenTools[key] = struct{}{}
-			known[resource.ParentID] = struct{}{}
-			resource.parentPresent = false
-			resolver.tools = append(resolver.tools, resource)
-		}
+		resolver.tools, configured, err = configuredMCPTools(catalog.Tools, configured, true)
+	case len(catalog.Servers) > 0:
+		resolver.mode = mcpCatalogServersOnly
+		resolver.servers, configured, err = configuredMCPServers(catalog.Servers)
+	default:
+		resolver.mode = mcpCatalogImplicitTools
+		resolver.tools, configured, err = configuredMCPTools(catalog.Tools, nil, false)
+	}
+	if err != nil {
+		return nil, err
 	}
 	for i, alias := range catalog.Aliases {
-		if _, ok := known[alias.ServerID]; !ok {
+		if _, ok := configured[alias.ServerID]; !ok {
 			return nil, fmt.Errorf("firewall: MCP alias %d server %q is not configured", i, alias.ServerID)
 		}
 		if err := validateExactIdentity(alias.Alias, "MCP alias"); err != nil {
@@ -132,6 +122,71 @@ func NewMCPCatalogResolver(catalog MCPCatalog) (*MCPResolver, error) {
 		resolver.explicitAliases[alias.ServerID] = append(resolver.explicitAliases[alias.ServerID], alias.Alias)
 	}
 	return resolver, nil
+}
+
+func configuredMCPServers(servers []Resource) ([]string, map[string]struct{}, error) {
+	ids := make([]string, 0, len(servers))
+	known := make(map[string]struct{}, len(servers))
+	for i, server := range servers {
+		if err := server.Validate(); err != nil {
+			return nil, nil, fmt.Errorf("firewall: configured MCP server %d: %w", i, err)
+		}
+		if server.Kind != ResourceKindMCPServer {
+			return nil, nil, fmt.Errorf(
+				"firewall: configured MCP server %d has kind %q, want %q",
+				i,
+				server.Kind,
+				ResourceKindMCPServer,
+			)
+		}
+		if _, exists := known[server.ID]; exists {
+			return nil, nil, fmt.Errorf("firewall: duplicate configured MCP server %q", server.ID)
+		}
+		known[server.ID] = struct{}{}
+		ids = append(ids, server.ID)
+	}
+	return ids, known, nil
+}
+
+func configuredMCPTools(tools []Resource, configured map[string]struct{}, anchored bool) ([]Resource, map[string]struct{}, error) {
+	if configured == nil {
+		configured = map[string]struct{}{}
+	}
+	accepted := make([]Resource, 0, len(tools))
+	seen := map[mcpDispatchKey]struct{}{}
+	for i, resource := range tools {
+		if err := resource.Validate(); err != nil {
+			return nil, nil, fmt.Errorf("firewall: configured MCP resource %d: %w", i, err)
+		}
+		if resource.Kind != ResourceKindMCPTool {
+			return nil, nil, fmt.Errorf(
+				"firewall: configured MCP resource %d has kind %q, want %q",
+				i,
+				resource.Kind,
+				ResourceKindMCPTool,
+			)
+		}
+		if anchored {
+			if _, ok := configured[resource.ParentID]; !ok {
+				continue
+			}
+		}
+		key := mcpDispatchKey{host: resource.ParentID, tool: resource.ID}
+		if _, exists := seen[key]; exists {
+			return nil, nil, fmt.Errorf(
+				"firewall: duplicate configured MCP tool %q under server %q",
+				resource.ID,
+				resource.ParentID,
+			)
+		}
+		seen[key] = struct{}{}
+		if !anchored {
+			configured[resource.ParentID] = struct{}{}
+		}
+		resource.parentPresent = false
+		accepted = append(accepted, resource)
+	}
+	return accepted, configured, nil
 }
 
 // Resolve recognizes mcp__<server>__<tool> and MCP:<server>:<tool>. Server and
@@ -153,7 +208,7 @@ func (r *MCPResolver) Resolve(dispatchName string) MCPResolution {
 		return MCPResolution{Status: MCPResolutionUnresolved}
 	}
 	var matches []Resource
-	if len(r.servers) > 0 {
+	if r.mode == mcpCatalogServersOnly {
 		matches = r.serverCandidates(body, separator)
 	} else {
 		matches = r.toolCandidates(body, separator)

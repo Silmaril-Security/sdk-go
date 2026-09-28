@@ -18,10 +18,10 @@ import (
 )
 
 var frozenGovernanceContractDigests = map[string]string{
-	"README.md":            "b26ba42b2d8bf4caa7c65cb910d8f4fee3837ec3f7130e881e542a235b341615",
-	"matching.json":        "7589f5d327a76878a8904b9543a0c5011218865842069a0cd70612f14fe34e91",
+	"README.md":            "6411ed95f5bd8db628ba4ad10722b6ea8caaebea27373539dcf746945e9b02b2",
+	"matching.json":        "88affeb3dbc8a4ea2dadcb1fe50234bc3a0209116f9eec9ce933f9a9ad49ddee",
 	"resource.schema.json": "b9ed2d0218aaca5ee741aa3bd544849fd61b4888bbf77ed4854684e64665ed84",
-	"SHA256SUMS":           "e7618661bbd0b969833a1512ae19a3ee57835186c520b4874b7c65159cb2d7e2",
+	"SHA256SUMS":           "63e21e0e1b44a801eb5f8a8fc6ec19c2ad8dd72ae0a9b747016e27ad4806ff60",
 }
 
 func TestFrozenGovernanceContractDigests(t *testing.T) {
@@ -77,8 +77,8 @@ func TestGovernanceDispatchContractVectors(t *testing.T) {
 	if err := json.Unmarshal(contents, &vectors); err != nil {
 		t.Fatal(err)
 	}
-	if len(vectors.Cases) != 19 {
-		t.Fatalf("mcp_dispatch_cases = %d, want 19", len(vectors.Cases))
+	if len(vectors.Cases) != 21 {
+		t.Fatalf("mcp_dispatch_cases = %d, want 21", len(vectors.Cases))
 	}
 	seen := map[string]struct{}{}
 	for _, vector := range vectors.Cases {
@@ -128,6 +128,10 @@ func resolverFromDispatchCatalog(catalog governanceDispatchCatalog) (*MCPResolve
 			aliases = append(aliases, MCPServerAlias{ServerID: server.ID, Alias: alias})
 		}
 	}
+	servers := make([]Resource, 0, len(catalog.Servers))
+	for _, server := range catalog.Servers {
+		servers = append(servers, Resource{Kind: ResourceKindMCPServer, ID: server.ID})
+	}
 	if len(catalog.Tools) > 0 {
 		tools := make([]Resource, 0, len(catalog.Tools))
 		for _, tool := range catalog.Tools {
@@ -137,11 +141,7 @@ func resolverFromDispatchCatalog(catalog governanceDispatchCatalog) (*MCPResolve
 				ParentID: tool.ParentID,
 			})
 		}
-		return NewMCPCatalogResolver(MCPCatalog{Tools: tools, Aliases: aliases})
-	}
-	servers := make([]Resource, 0, len(catalog.Servers))
-	for _, server := range catalog.Servers {
-		servers = append(servers, Resource{Kind: ResourceKindMCPServer, ID: server.ID})
+		return NewMCPCatalogResolver(MCPCatalog{Tools: tools, Servers: servers, Aliases: aliases})
 	}
 	return NewMCPCatalogResolver(MCPCatalog{Servers: servers, Aliases: aliases})
 }

@@ -473,15 +473,74 @@ func TestMCPServerCatalogExactAliasCollisionAndExplicitAlias(t *testing.T) {
 	}
 }
 
-func TestNewMCPCatalogResolverRejectsMixedOrUnknownAliases(t *testing.T) {
-	_, err := NewMCPCatalogResolver(MCPCatalog{
-		Tools:   []Resource{{Kind: ResourceKindMCPTool, ID: "search", ParentID: "server"}},
-		Servers: []Resource{{Kind: ResourceKindMCPServer, ID: "server"}},
+func TestMCPAnchoredCatalogIgnoresOrphanToolParent(t *testing.T) {
+	resolver, err := NewMCPCatalogResolver(MCPCatalog{
+		Servers: []Resource{{Kind: ResourceKindMCPServer, ID: "active"}},
+		Tools: []Resource{
+			{Kind: ResourceKindMCPTool, ID: "search", ParentID: "removed"},
+			{Kind: ResourceKindMCPTool, ID: "list", ParentID: "active"},
+		},
 	})
-	if err == nil {
-		t.Fatal("expected mixed catalog error")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dispatch := range []string{"mcp__removed__search", "mcp__active__search", "MCP:removed:search"} {
+		resolution := resolver.Resolve(dispatch)
+		if resolution.Status != MCPResolutionUnresolved || resolution.Resource != nil {
+			t.Fatalf("%q resolution = %+v", dispatch, resolution)
+		}
+	}
+	listed := resolver.Resolve("mcp__active__list")
+	if listed.Status != MCPResolutionResolved || listed.Resource == nil ||
+		listed.Resource.ParentID != "active" || listed.Resource.ID != "list" {
+		t.Fatalf("anchored tool = %+v", listed)
 	}
 	_, err = NewMCPCatalogResolver(MCPCatalog{
+		Servers: []Resource{{Kind: ResourceKindMCPServer, ID: "active"}},
+		Tools:   []Resource{{Kind: ResourceKindMCPTool, ID: "search", ParentID: "removed"}},
+		Aliases: []MCPServerAlias{{ServerID: "removed", Alias: "old"}},
+	})
+	if err == nil {
+		t.Fatal("expected alias on orphan parent to be rejected")
+	}
+}
+
+func TestMCPToolCatalogKeepsImplicitParents(t *testing.T) {
+	tool := Resource{Kind: ResourceKindMCPTool, ID: "search", ParentID: "removed"}
+	constructors := []struct {
+		name    string
+		resolve func() (*MCPResolver, error)
+	}{
+		{
+			name: "NewMCPResolver",
+			resolve: func() (*MCPResolver, error) {
+				return NewMCPResolver([]Resource{tool})
+			},
+		},
+		{
+			name: "tools only",
+			resolve: func() (*MCPResolver, error) {
+				return NewMCPCatalogResolver(MCPCatalog{Tools: []Resource{tool}})
+			},
+		},
+	}
+	for _, tc := range constructors {
+		t.Run(tc.name, func(t *testing.T) {
+			resolver, err := tc.resolve()
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolution := resolver.Resolve("mcp__removed__search")
+			if resolution.Status != MCPResolutionResolved || resolution.Resource == nil ||
+				resolution.Resource.ParentID != "removed" || resolution.Resource.ID != "search" {
+				t.Fatalf("resolution = %+v", resolution)
+			}
+		})
+	}
+}
+
+func TestNewMCPCatalogResolverRejectsUnknownAliases(t *testing.T) {
+	_, err := NewMCPCatalogResolver(MCPCatalog{
 		Servers: []Resource{{Kind: ResourceKindMCPServer, ID: "server"}},
 		Aliases: []MCPServerAlias{{ServerID: "other", Alias: "alias"}},
 	})
