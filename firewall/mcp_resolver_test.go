@@ -2,7 +2,10 @@
 
 package firewall
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestMCPResolverExactAndUniqueAlias(t *testing.T) {
 	resolver, err := NewMCPResolver([]Resource{
@@ -137,6 +140,143 @@ func TestMCPResolverReturnsIndependentResourceCopy(t *testing.T) {
 	second := resolver.Resolve("MCP:server:search")
 	if second.Resource == nil || second.Resource.ID != "search" {
 		t.Fatalf("second resource = %+v", second.Resource)
+	}
+}
+
+func TestMCPResolverMatchesConfiguredIDsContainingSeparators(t *testing.T) {
+	resolver, err := NewMCPResolver([]Resource{
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "prod__west"},
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "prod:west"},
+		{Kind: ResourceKindMCPTool, ID: "west__search", ParentID: "staging"},
+		{Kind: ResourceKindMCPTool, ID: "west:search", ParentID: "staging"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		dispatch string
+		parent   string
+		tool     string
+	}{
+		{dispatch: "mcp__prod__west__search", parent: "prod__west", tool: "search"},
+		{dispatch: "MCP:prod:west:search", parent: "prod:west", tool: "search"},
+		{dispatch: "mcp__staging__west__search", parent: "staging", tool: "west__search"},
+		{dispatch: "MCP:staging:west:search", parent: "staging", tool: "west:search"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.dispatch, func(t *testing.T) {
+			resolution := resolver.Resolve(tc.dispatch)
+			if resolution.Status != MCPResolutionResolved || resolution.Resource == nil {
+				t.Fatalf("resolution = %+v", resolution)
+			}
+			if resolution.Resource.Kind != ResourceKindMCPTool ||
+				resolution.Resource.ParentID != tc.parent ||
+				resolution.Resource.ID != tc.tool {
+				t.Fatalf("resource = %+v", resolution.Resource)
+			}
+		})
+	}
+}
+
+func TestMCPResolverExactSeparatorIdentityPrecedesAlias(t *testing.T) {
+	resolver, err := NewMCPResolver([]Resource{
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "prod__west-1"},
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "prod__west_1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolution := resolver.Resolve("mcp__prod__west_1__search")
+	if resolution.Status != MCPResolutionResolved || resolution.Resource == nil {
+		t.Fatalf("resolution = %+v", resolution)
+	}
+	if resolution.Resource.ParentID != "prod__west_1" {
+		t.Fatalf("parent = %q, want exact prod__west_1", resolution.Resource.ParentID)
+	}
+	aliasOnly, err := NewMCPResolver([]Resource{
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "prod__west-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	alias := aliasOnly.Resolve("mcp__prod__west_1__search")
+	if alias.Status != MCPResolutionResolved || alias.Resource == nil || alias.Resource.ParentID != "prod__west-1" {
+		t.Fatalf("alias resolution = %+v", alias)
+	}
+}
+
+func TestMCPResolverAmbiguousOverlappingSeparatorInterpretations(t *testing.T) {
+	resolver, err := NewMCPResolver([]Resource{
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "prod__west"},
+		{Kind: ResourceKindMCPTool, ID: "west__search", ParentID: "prod"},
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "prod:west"},
+		{Kind: ResourceKindMCPTool, ID: "west:search", ParentID: "prod"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dispatch := range []string{
+		"mcp__prod__west__search",
+		"MCP:prod:west:search",
+	} {
+		resolution := resolver.Resolve(dispatch)
+		if resolution.Status != MCPResolutionAmbiguous || resolution.Resource != nil {
+			t.Fatalf("%q resolution = %+v", dispatch, resolution)
+		}
+	}
+}
+
+func TestMCPResolverDuplicateToolNamesRemainParentSpecific(t *testing.T) {
+	resolver, err := NewMCPResolver([]Resource{
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "alpha"},
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "beta"},
+		{Kind: ResourceKindMCPTool, ID: "search", ParentID: "prod__west"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"mcp__alpha__search":      "alpha",
+		"mcp__beta__search":       "beta",
+		"MCP:alpha:search":        "alpha",
+		"MCP:prod__west:search":   "prod__west",
+		"mcp__prod__west__search": "prod__west",
+	}
+	for dispatch, parent := range cases {
+		resolution := resolver.Resolve(dispatch)
+		if resolution.Status != MCPResolutionResolved || resolution.Resource == nil {
+			t.Fatalf("%q resolution = %+v", dispatch, resolution)
+		}
+		if resolution.Resource.ParentID != parent || resolution.Resource.ID != "search" {
+			t.Fatalf("%q resource = %+v", dispatch, resolution.Resource)
+		}
+	}
+}
+
+func TestMCPResolverLongSeparatorNamesStayUnresolvedOrExact(t *testing.T) {
+	parent := strings.Repeat("region__", 32) + "tail"
+	tool := strings.Repeat("search__", 16) + "end"
+	resolver, err := NewMCPResolver([]Resource{
+		{Kind: ResourceKindMCPTool, ID: tool, ParentID: parent},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch := "mcp__" + parent + "__" + tool
+	first := resolver.Resolve(dispatch)
+	second := resolver.Resolve(dispatch)
+	if first.Status != MCPResolutionResolved || second.Status != MCPResolutionResolved {
+		t.Fatalf("resolutions = %+v %+v", first, second)
+	}
+	if first.Resource == nil || second.Resource == nil ||
+		first.Resource.ParentID != parent || second.Resource.ID != tool ||
+		first.Resource.ParentID != second.Resource.ParentID ||
+		first.Resource.ID != second.Resource.ID {
+		t.Fatalf("resources = %+v %+v", first.Resource, second.Resource)
+	}
+	unknown := resolver.Resolve(dispatch + "__extra")
+	if unknown.Status != MCPResolutionUnresolved || unknown.Resource != nil {
+		t.Fatalf("unknown = %+v", unknown)
 	}
 }
 

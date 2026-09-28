@@ -12,8 +12,10 @@
   Benign, while preserving explicit Shadow and Warn mode behavior and existing
   malicious-prediction enforcement.
 - Adds an immutable, caller-configured MCP resolver for `mcp__` and `MCP:`
-  dispatch names. Resolution prefers exact configured identities, then a
-  unique host alias, and reports unresolved or ambiguous outcomes explicitly.
+  dispatch names. Resolution matches complete configured server and tool
+  identities, including IDs that contain dispatch separators, then applies a
+  unique host alias. Overlapping interpretations and alias collisions are
+  ambiguous.
 - Vendors and verifies governance identity contract 1.0.0, including exact
   artifact digests and all matching vectors.
 
