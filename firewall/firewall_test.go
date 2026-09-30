@@ -394,6 +394,7 @@ func TestClassifyBatchSerializesMetadata(t *testing.T) {
 			Predictions: []singleResponse{
 				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5},
 				{Prediction: PredictionBenign, Score: 0.2, Threshold: 0.5},
+				{Prediction: PredictionBenign, Score: 0.3, Threshold: 0.5},
 			},
 		})
 	}))
@@ -401,24 +402,35 @@ func TestClassifyBatchSerializesMetadata(t *testing.T) {
 
 	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL})
 	metadata := []ClassificationMetadata{
-		{"langgraph": map[string]any{"run_id": "run-a"}},
+		{"langgraph": map[string]any{"run_id": "run-a"}, "silmaril": map[string]any{"agent_model_id": "provider/model-a"}},
+		{"silmaril": map[string]any{"agent_model_id": "provider/model-b"}},
 		nil,
 	}
-	if _, err := fw.ClassifyBatch(context.Background(), []string{"a", "b"},
+	if _, err := fw.ClassifyBatch(context.Background(), []string{"a", "b", "c"},
 		WithBatchMetadata(metadata),
 		WithBatchRequestID("req-batch-meta"),
 	); err != nil {
 		t.Fatal(err)
 	}
-	if len(gotPayload.Metadata) != 2 {
-		t.Fatalf("metadata length = %d, want 2", len(gotPayload.Metadata))
+	if len(gotPayload.Metadata) != 3 {
+		t.Fatalf("metadata length = %d, want 3", len(gotPayload.Metadata))
 	}
-	index0, index1 := 0, 1
+	index0, index1, index2 := 0, 1, 2
 	requireSilmarilMetadata(t, gotPayload.Metadata[0], "req-batch-meta", &index0)
+	if got := (*gotPayload.Metadata[0])["silmaril"].(map[string]any)["agent_model_id"]; got != "provider/model-a" {
+		t.Fatalf("metadata[0] agent_model_id = %#v", got)
+	}
 	if !reflect.DeepEqual((*gotPayload.Metadata[0])["langgraph"], metadata[0]["langgraph"]) {
 		t.Fatalf("metadata[0] langgraph = %#v, want %#v", (*gotPayload.Metadata[0])["langgraph"], metadata[0]["langgraph"])
 	}
 	requireSilmarilMetadata(t, gotPayload.Metadata[1], "req-batch-meta", &index1)
+	if got := (*gotPayload.Metadata[1])["silmaril"].(map[string]any)["agent_model_id"]; got != "provider/model-b" {
+		t.Fatalf("metadata[1] agent_model_id = %#v", got)
+	}
+	unknown := requireSilmarilMetadata(t, gotPayload.Metadata[2], "req-batch-meta", &index2)
+	if _, ok := unknown["agent_model_id"]; ok {
+		t.Fatalf("metadata[2] unexpectedly contains agent_model_id: %#v", unknown)
+	}
 }
 
 func TestClassifyBatchDoesNotSendThresholds(t *testing.T) {
