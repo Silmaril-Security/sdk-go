@@ -25,14 +25,15 @@ type batchRequestPayload struct {
 }
 
 type singleResponse struct {
-	Prediction     Prediction         `json:"prediction"`
-	Score          float64            `json:"score"`
-	Threshold      float64            `json:"threshold"`
-	Mode           FirewallMode       `json:"mode"`
-	PrimaryOutcome *string            `json:"primary_outcome"`
-	OutcomeScores  map[string]float64 `json:"outcome_scores"`
-	DetectorScores map[string]float64 `json:"detector_scores"`
-	DetectorCounts map[string]int     `json:"detector_counts"`
+	Prediction     Prediction          `json:"prediction"`
+	Score          float64             `json:"score"`
+	Threshold      float64             `json:"threshold"`
+	Mode           FirewallMode        `json:"mode"`
+	PrimaryOutcome *string             `json:"primary_outcome"`
+	OutcomeScores  map[string]float64  `json:"outcome_scores"`
+	DetectorScores map[string]float64  `json:"detector_scores"`
+	DetectorCounts map[string]int      `json:"detector_counts"`
+	Governance     *GovernanceDecision `json:"governance"`
 }
 
 type batchResponse struct {
@@ -71,6 +72,7 @@ func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg class
 	if err != nil {
 		return BlockResult{}, err
 	}
+	setGovernanceMetadata(metadata, cfg.governance)
 	payload := singleRequestPayload{
 		Text:     text,
 		Metadata: metadata,
@@ -144,6 +146,9 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 	if cfg.metadataSet && len(cfg.metadata) != len(texts) {
 		return nil, fmt.Errorf("firewall: metadata length %d does not match texts length %d", len(cfg.metadata), len(texts))
 	}
+	if cfg.governance != nil && len(cfg.governance) != len(texts) {
+		return nil, fmt.Errorf("firewall: governance length %d does not match texts length %d", len(cfg.governance), len(texts))
+	}
 	payload := batchRequestPayload{
 		Texts: texts,
 	}
@@ -194,7 +199,7 @@ func (f *Firewall) newClassifyEvent(text string, hook HookLabel, toolName string
 		ToolName:   toolName,
 		Text:       text,
 		Result:     result,
-		Blocked:    result.Prediction == PredictionMalicious,
+		Blocked:    result.Prediction == PredictionMalicious || (result.Governance != nil && result.Governance.Action == GovernanceBlock),
 		Mode:       effectiveMode,
 		ShadowMode: effectiveMode == ModeShadow,
 	}
@@ -309,6 +314,9 @@ func batchMetadata(cfg batchClassifyConfig, length int) ([]*ClassificationMetada
 		if err != nil {
 			return nil, err
 		}
+		if cfg.governance != nil {
+			setGovernanceMetadata(metadata, cfg.governance[i])
+		}
 		out[i] = metadata
 	}
 	return out, nil
@@ -323,6 +331,14 @@ func blockResultFromResponse(resp singleResponse, requestedMode ...FirewallMode)
 	if resp.Mode != "" {
 		if err := validateMode(resp.Mode); err != nil {
 			return BlockResult{}, fmt.Errorf("firewall: invalid backend mode %q", resp.Mode)
+		}
+	}
+	if resp.Governance != nil {
+		if resp.Governance.Action != GovernanceAllow && resp.Governance.Action != GovernanceBlock {
+			return BlockResult{}, fmt.Errorf("firewall: response governance action must be allow or block")
+		}
+		if resp.Governance.PolicyVersion == "" {
+			return BlockResult{}, fmt.Errorf("firewall: response governance policy_version must be non-empty")
 		}
 	}
 	mode := resp.Mode
@@ -361,5 +377,6 @@ func blockResultFromResponse(resp singleResponse, requestedMode ...FirewallMode)
 		OutcomeScores:  outcomeScores,
 		DetectorScores: detectorScores,
 		DetectorCounts: detectorCounts,
+		Governance:     resp.Governance,
 	}, nil
 }

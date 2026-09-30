@@ -9,7 +9,7 @@ import (
 )
 
 // SDKVersion is the semantic version reported in metadata.silmaril.
-const SDKVersion = "0.6.1"
+const SDKVersion = "0.7.0"
 
 func newRequestID() string {
 	var b [16]byte
@@ -63,4 +63,12 @@ func sdkMetadata(
 	}
 	out["silmaril"] = namespace
 	return &out, nil
+}
+
+func setGovernanceMetadata(metadata *ClassificationMetadata, context *GovernanceContext) {
+	if context == nil {
+		return
+	}
+	namespace := (*metadata)["silmaril"].(map[string]any)
+	namespace["governance"] = context
 }

@@ -41,7 +41,7 @@ go get github.com/Silmaril-Security/sdk-go/firewall@latest
 For reproducible installs, pin a tagged release:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.6.1
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.7.0
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -164,6 +164,15 @@ malicious result returns a typed blocking error only when the effective mode is
 `firewall.ModeBlock`; `ModeShadow` and `ModeWarn` return the result unchanged.
 A legacy mode-less response leaves `BlockResult.Mode` empty when no override
 was requested; direct SDK calls retain their pre-0.6 Block default internally.
+
+An explicit governance decision with `action=block` has the same Block-mode
+effect, even when the prediction is benign. `BlockResult.Governance` holds the
+server action, policy version, and optional rule ID; it is nil for older
+responses. `WithGovernance` on `Classify` and `WithBatchGovernance` with one
+optional context per text on `ClassifyBatch` send agent and resource context
+under `metadata.silmaril.governance`. The server owns the policy decision.
+Go exposes this through its direct classification API; it has no Deep Agents
+graph adapter.
 
 When `HTTPClient` is provided, the SDK clones it without mutating your original
 client. Its timeout is preserved unless `Options.Timeout` is explicitly

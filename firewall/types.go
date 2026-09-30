@@ -24,6 +24,42 @@ const (
 	ModeBlock  FirewallMode = "block"
 )
 
+type GovernanceAction string
+
+const (
+	GovernanceAllow GovernanceAction = "allow"
+	GovernanceBlock GovernanceAction = "block"
+)
+
+type GovernanceResourceKind string
+
+const (
+	GovernanceAgent     GovernanceResourceKind = "agent"
+	GovernanceTool      GovernanceResourceKind = "tool"
+	GovernanceMCPServer GovernanceResourceKind = "mcp_server"
+	GovernanceMCPTool   GovernanceResourceKind = "mcp_tool"
+	GovernancePlugin    GovernanceResourceKind = "plugin"
+	GovernanceSkill     GovernanceResourceKind = "skill"
+	GovernanceExtension GovernanceResourceKind = "extension"
+)
+
+type GovernanceResource struct {
+	Kind     GovernanceResourceKind `json:"kind"`
+	ID       string                 `json:"id,omitempty"`
+	ParentID string                 `json:"parent_id,omitempty"`
+}
+
+type GovernanceContext struct {
+	Agent    string              `json:"agent,omitempty"`
+	Resource *GovernanceResource `json:"resource,omitempty"`
+}
+
+type GovernanceDecision struct {
+	Action        GovernanceAction `json:"action"`
+	PolicyVersion string           `json:"policy_version"`
+	RuleID        string           `json:"rule_id,omitempty"`
+}
+
 // BlockResult is the output of a single classification call.
 type BlockResult struct {
 	Prediction Prediction `json:"prediction"`
@@ -35,6 +71,7 @@ type BlockResult struct {
 	OutcomeScores  map[HarmfulOutcome]float64 `json:"outcome_scores,omitempty"`
 	DetectorScores map[HarmfulOutcome]float64 `json:"detector_scores,omitempty"`
 	DetectorCounts map[HarmfulOutcome]int     `json:"detector_counts,omitempty"`
+	Governance     *GovernanceDecision        `json:"governance,omitempty"`
 }
 
 // ClassificationMetadata carries caller-provided request metadata alongside
@@ -69,6 +106,7 @@ type classifyConfig struct {
 	mode       *FirewallMode
 	shadowMode *bool
 	requestID  string
+	governance *GovernanceContext
 }
 
 // ClassifyOption customizes a single Classify call.
@@ -88,6 +126,12 @@ func WithToolName(name string) ClassifyOption {
 // Do not mutate the map while that Classify call is in flight.
 func WithMetadata(metadata ClassificationMetadata) ClassifyOption {
 	return func(c *classifyConfig) { c.metadata = &metadata }
+}
+
+// WithGovernance supplies the resource being evaluated. The server still owns
+// principal authentication and policy decisions.
+func WithGovernance(context GovernanceContext) ClassifyOption {
+	return func(c *classifyConfig) { c.governance = &context }
 }
 
 // WithMode overrides the backend-controlled mode for a single Classify call.
@@ -114,6 +158,7 @@ type batchClassifyConfig struct {
 	mode        *FirewallMode
 	shadowMode  *bool
 	requestID   string
+	governance  []*GovernanceContext
 }
 
 // BatchClassifyOption customizes a single ClassifyBatch call.
@@ -138,6 +183,11 @@ func WithBatchMetadata(metadata []ClassificationMetadata) BatchClassifyOption {
 		c.metadata = metadata
 		c.metadataSet = true
 	}
+}
+
+// WithBatchGovernance supplies one optional governance context per input.
+func WithBatchGovernance(contexts []*GovernanceContext) BatchClassifyOption {
+	return func(c *batchClassifyConfig) { c.governance = contexts }
 }
 
 // WithBatchMode overrides the backend-controlled mode for one ClassifyBatch call.

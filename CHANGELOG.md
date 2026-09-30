@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.7.0
+
+- Add typed governance context for single and batch classifications using the
+  existing Firewall wire shape for agent, hook, principal, and governed resources.
+- Normalize response governance decisions and treat an explicit governance block
+  as blocked, alongside malicious predictions.
+- Preserve compatibility with older responses that omit governance.
+
 ## v0.6.1
 
 - Documents that one `Firewall` may be shared by goroutines: `Classify` and
