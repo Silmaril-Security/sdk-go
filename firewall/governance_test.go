@@ -72,3 +72,26 @@ func TestGovernanceBatchWireAndLength(t *testing.T) {
 		t.Fatal("expected governance length error")
 	}
 }
+
+func TestGovernanceBatchBlockModeIncludesBenignPolicyDenial(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"predictions":[{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block","governance":{"action":"block","policy_version":"v2","rule_id":"policy-1"}},{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block"}]}`))
+	}))
+	defer server.Close()
+
+	fw, err := New(Options{APIKey: "sk", APIURL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results, err := fw.ClassifyBatch(context.Background(), []string{"governed", "allowed"}, WithBatchGovernance([]*GovernanceContext{{Agent: "a"}, nil}))
+	var blocked *BatchFirewallBlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("expected BatchFirewallBlockedError, got %v", err)
+	}
+	if len(results) != 2 || len(blocked.Blocked) != 1 || blocked.Blocked[0].Index != 0 {
+		t.Fatalf("results=%+v blocked=%+v", results, blocked.Blocked)
+	}
+	if decision := blocked.Blocked[0].Result.Governance; decision == nil || decision.Action != GovernanceBlock || decision.RuleID != "policy-1" {
+		t.Fatalf("blocked decision=%+v", decision)
+	}
+}

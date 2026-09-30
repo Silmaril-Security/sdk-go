@@ -129,7 +129,8 @@ func WithMetadata(metadata ClassificationMetadata) ClassifyOption {
 }
 
 // WithGovernance supplies the resource being evaluated. The server still owns
-// principal authentication and policy decisions.
+// principal authentication and policy decisions. Do not mutate the context or
+// its resource while the Classify call is in flight.
 func WithGovernance(context GovernanceContext) ClassifyOption {
 	return func(c *classifyConfig) { c.governance = &context }
 }
@@ -186,6 +187,8 @@ func WithBatchMetadata(metadata []ClassificationMetadata) BatchClassifyOption {
 }
 
 // WithBatchGovernance supplies one optional governance context per input.
+// Do not mutate the slice, its contexts, or their resources while the
+// ClassifyBatch call is in flight.
 func WithBatchGovernance(contexts []*GovernanceContext) BatchClassifyOption {
 	return func(c *batchClassifyConfig) { c.governance = contexts }
 }
