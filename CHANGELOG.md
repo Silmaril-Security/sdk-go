@@ -2,8 +2,10 @@
 
 ## v0.7.0
 
-- Add typed governance context for single and batch classifications using the
-  existing Firewall wire shape for agent, hook, principal, and governed resources.
+- Add typed governance context for single and batch classifications. The SDK
+  sends `agent` and governed `resource` on `metadata.silmaril.governance`.
+  Hook stays a separate request field, and the server owns the authenticated
+  principal.
 - Normalize response governance decisions and treat an explicit governance block
   as blocked, alongside malicious predictions.
 - Preserve compatibility with older responses that omit governance.

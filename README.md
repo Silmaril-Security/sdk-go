@@ -141,8 +141,9 @@ shared. The SDK does not start worker pools or extra public async APIs.
 Callers remain responsible for concurrent safety of values they own. Do not
 mutate a metadata map (or a batch metadata slice) while that call is in flight.
 If you set `OnClassify`, synchronize any state it touches; overlapping calls
-may invoke it concurrently. If you supply `HTTPClient`, its `Transport` must
-be safe for concurrent `Do` (the Go default transport is).
+may invoke it concurrently. A panic in that callback is recovered and does not
+fail the classification. If you supply `HTTPClient`, its `Transport` must be
+safe for concurrent `Do` (the Go default transport is).
 
 ## Options
 
@@ -160,19 +161,27 @@ type Options struct {
 
 `Classify` returns the server's prediction, score, backend-applied threshold,
 and effective mode. When `Mode` is omitted, the backend controls the mode. A
-malicious result returns a typed blocking error only when the effective mode is
-`firewall.ModeBlock`; `ModeShadow` and `ModeWarn` return the result unchanged.
-A legacy mode-less response leaves `BlockResult.Mode` empty when no override
-was requested; direct SDK calls retain their pre-0.6 Block default internally.
+malicious prediction, or a governance `Action` of `block`, returns a typed
+blocking error only when the effective mode is `firewall.ModeBlock`.
+`ModeShadow` and `ModeWarn` return the result unchanged. A legacy mode-less
+response leaves `BlockResult.Mode` empty when no override was requested; direct
+SDK calls retain their pre-0.6 Block default internally. `New` rejects an empty
+`APIKey` or `APIURL`, a negative `Timeout`, and a `Mode` other than empty,
+`shadow`, `warn`, or `block`.
 
-An explicit governance decision with `action=block` has the same Block-mode
-effect, even when the prediction is benign. `BlockResult.Governance` holds the
-server action, policy version, and optional rule ID; it is nil for older
-responses. `WithGovernance` on `Classify` and `WithBatchGovernance` with one
-optional context per text on `ClassifyBatch` send agent and resource context
-under `metadata.silmaril.governance`. The server owns the policy decision.
-Go exposes this through its direct classification API; it has no Deep Agents
-graph adapter.
+`BlockResult.Governance` is nil when the response omits it. Otherwise it holds
+`Action`, `PolicyVersion`, and optional `RuleID` (`action`, `policy_version`,
+and `rule_id` on the wire). A non-nil decision whose `Action` is not `allow`
+or `block`, or whose `PolicyVersion` is empty, is an error. `Action` `block`
+sets `ClassifyEvent.Blocked` even when `Prediction` is benign.
+`WithGovernance` and `WithBatchGovernance` send optional `Agent` and `Resource`
+context under `metadata.silmaril.governance` (`agent`, and `resource` with
+`kind`, `id`, and `parent_id`). Resource kinds are `agent`, `tool`,
+`mcp_server`, `mcp_tool`, `plugin`, `skill`, and `extension`. When the batch
+governance slice is set, its length must match the texts; a nil entry omits
+governance for that item. Hook remains a separate request field. The SDK does
+not send a principal; the server owns principal authentication and the policy
+decision. This package has no Deep Agents graph adapter.
 
 When `HTTPClient` is provided, the SDK clones it without mutating your original
 client. Its timeout is preserved unless `Options.Timeout` is explicitly
@@ -239,11 +248,11 @@ Outcome taxonomy:
 ## Backend Thresholding
 
 Customers do not tune score thresholds in the SDK. Tenant Firewall config owns
-the adaptive threshold schedule. The default backend config is
-`base_threshold=0.5`, `target_sequence_fpr=0.01`, and
-`max_adaptive_threshold=0.9`, which keeps the current schedule: 1 scoring
-opportunity uses `0.5`, 2 use about `0.6661`, 5 use about `0.8328`, and 10 or
-more are capped at `0.9`.
+the adaptive threshold schedule and can override the source defaults. Those
+defaults are `base_threshold=0.5`, `target_sequence_fpr=0.01`, and
+`max_adaptive_threshold=0.9`. Under those defaults, 1 scoring opportunity uses
+`0.5`, 2 use about `0.6661`, 5 use about `0.8328`, and 10 or more are capped
+at `0.9`.
 
 The SDK does not send `threshold` in request payloads. The backend owns the
 applied threshold, which remains available on
@@ -308,8 +317,8 @@ precedence. Because an omitted Go `bool` is indistinguishable from `false`, use
 `ModeBlock` for a client-level explicit Block override.
 
 `ClassifyEvent` includes `Hook`, `ToolName`, `Text`, `Result`, `Blocked`,
-`Mode`, and `ShadowMode`. `Blocked` records a malicious decision; only effective
-Block mode raises a blocking error.
+`Mode`, and `ShadowMode`. `Blocked` is true for a malicious prediction or a
+governance block. Only effective Block mode raises a blocking error.
 
 ## Hook labels
 
@@ -325,7 +334,8 @@ firewall.HookUnknown       // "unknown"
 `firewall.PrependHook` and `firewall.PrependToolName` are legacy helpers for
 manual text-prefix integrations. `Classify` and `ClassifyBatch` send hook and
 tool metadata as structured JSON fields, so normal callers should use
-`WithHook`, `WithToolName`, `WithBatchHooks`, and `WithBatchToolNames`.
+`WithHook`, `WithToolName`, `WithBatchHooks`, and `WithBatchToolNames`. An
+empty batch tool name omits `tool_name` for that item.
 
 ## Request Metadata
 
@@ -354,7 +364,8 @@ as the backend sequence identity. No aliases are inspected. If callers provide
 overwritten by the SDK.
 
 Batch calls accept one metadata object per text. The metadata slice must match
-the number of texts; use `nil` for entries without metadata:
+the number of texts. A nil entry adds no caller fields, but the SDK still
+writes `metadata.silmaril` for that item; the entry is not JSON null:
 
 ```go
 _, err := fw.ClassifyBatch(ctx,
@@ -372,12 +383,12 @@ _, err := fw.ClassifyBatch(ctx,
 
 ## Errors
 
-- `*firewall.APIError`: returned when the firewall API responds with a non-2xx or redirect status. Carries `Status`, `StatusText`, and a 64 KiB-capped `Body`; the default error string omits the body to keep logs clean.
-- `*firewall.FirewallBlockedError`: returned by `Classify` in enforcement mode when the backend blocks the request. Carries `Score`, `Threshold`, `PromptText`, `Hook`, `ToolName`, and `Result`.
-- `*firewall.BatchFirewallBlockedError`: returned by `ClassifyBatch` in enforcement mode when one or more inputs are blocked. Carries all blocked items with index, text, hook, tool name, and result.
+- `*firewall.APIError`: returned when the firewall API responds with a non-2xx status, including a redirect the client did not follow. Carries `Status`, `StatusText`, a 64 KiB-capped `Body`, and optional `Details` when the body has a `details` object (`Field`, `InputIndex`, `CharOffset`, `MalformedToken`, `CodePoint`, `Reason`). The default error string omits the body.
+- `*firewall.FirewallBlockedError`: returned by `Classify` when the effective mode is block and the decision is a malicious prediction or a governance block. Also returns the `BlockResult`. Carries `Score`, `Threshold`, `PromptText`, `Hook`, `ToolName`, and `Result`.
+- `*firewall.BatchFirewallBlockedError`: returned by `ClassifyBatch` in that same case for one or more inputs, along with the result slice. Carries each blocked item's index, text, hook, tool name, and result.
 
-`*firewall.PromptBlockedError` and `*firewall.BatchPromptBlockedError` remain
-as deprecated aliases for one release.
+`PromptBlockedError` and `BatchPromptBlockedError` remain deprecated aliases of
+those types.
 
 All error types satisfy `error` and work with `errors.As`.
 
@@ -412,15 +423,16 @@ log.Printf("classified %d items", len(results))
 ```
 
 Batch requests carry one SDK metadata object per item so the backend can apply
-tenant-owned thresholding. Hook, tool-name, and metadata slices must match the
-number of texts.
+tenant-owned thresholding. An empty text slice is an error. Hook, tool-name,
+metadata, and governance slices must match the number of texts when they are
+set.
 
 ## Migration Notes
 
-Version `0.4.0` moves all threshold decisions to Firewall tenant/backend
-config, adds SDK reconstruction metadata, and renames blocking errors to
-`FirewallBlockedError` and `BatchFirewallBlockedError`. Deprecated
-`PromptBlockedError` aliases remain available for one release.
+Version `0.4.0` moved threshold decisions to Firewall tenant/backend config,
+added SDK reconstruction metadata, and renamed blocking errors to
+`FirewallBlockedError` and `BatchFirewallBlockedError`. The
+`PromptBlockedError` names remain deprecated aliases.
 
 ## Retries
 

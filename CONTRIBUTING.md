@@ -39,14 +39,17 @@ docs or package-level examples only when they are generic and safe to publish.
 
 ## Releases
 
-1. Update `VERSION` and add a matching `CHANGELOG.md` section.
+1. Update `VERSION` and add a `CHANGELOG.md` section headed `## vX.Y.Z`.
 2. Run `make check`.
-3. Create a semantic version tag:
+3. Merge that change to `main`.
 
-```sh
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
+A push to `main` runs
+[`.github/workflows/release.yml`](.github/workflows/release.yml). When `origin`
+does not already have the tag `v` + `VERSION`, that workflow checks formatting,
+module tidiness, `go vet`, and race tests, creates and pushes the tag, warms
+the public Go module proxy, and opens the GitHub release from the matching
+changelog section.
 
-The release workflow verifies the pushed tag against `VERSION`, runs race
-tests, warms the public Go module proxy, and creates the GitHub release.
+Pushing the tag yourself only runs the tag-verification job. That job checks
+the tag against `VERSION` and runs `go test -race ./...`. It does not warm the
+module proxy or create the GitHub release.
