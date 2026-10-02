@@ -27,7 +27,9 @@ This SDK provides the low-level Go interface for that workflow:
 - Honor backend threat and governance decisions and effective Shadow, Warn, or
   Block behavior.
 - Send each complete sanitized event in one request.
-- Preserve exact `metadata.conversationId` sequence identity and add one event ID.
+- Preserve per-item metadata, including exact `metadata.conversationId`, and
+  add one event ID. Individual `Classify` calls use that value as sequence
+  identity.
 - Retry transient API Gateway and model-serving failures.
 
 ## Install
@@ -131,9 +133,13 @@ func main() {
 
 Share one `Firewall` across goroutines. `Classify` and `ClassifyBatch` already
 run independently: each call uses the `context.Context` you pass, builds its
-own request payload, and does not mutate shared client request state. Canceling
-one context aborts only that call, including an in-flight HTTP round-trip or
-retry backoff. Sibling calls on the same client continue.
+own request payload, and does not mutate shared client request state. Concurrent
+calls are appropriate for independent events or different conversations. When
+events belong to one conversation, send ordered individual `Classify` calls
+with the same `metadata.conversationId` and wait for each call before sending
+the next event. Canceling one context aborts only that call, including an
+in-flight HTTP round-trip or retry backoff. Sibling calls on the same client
+continue.
 
 Pass a distinct context per call when timeouts or cancellation should not be
 shared. The SDK does not start worker pools or extra public async APIs.
@@ -360,10 +366,16 @@ _, err := fw.Classify(ctx, text,
 The SDK preserves caller metadata and adds a reserved `metadata.silmaril`
 namespace to every request. SDK-controlled fields are `sdk_language`,
 `sdk_version`, and `request_id`; batches additionally carry `input_index` for
-diagnostics and remain stateless. Exact `metadata.conversationId` is preserved
-as the backend sequence identity. No aliases are inspected. If callers provide
+diagnostics. No aliases are inspected. If callers provide
 `metadata["silmaril"]`, it must be an object and SDK-reserved keys are
 overwritten by the SDK.
+
+On an individual `Classify` call, exact `metadata.conversationId` is preserved
+and used as the backend sequence identity. For conversation-aware checks, send
+each complete event with `Classify`, reuse the same `metadata.conversationId`,
+and wait for that call to finish before sending the next event for that
+conversation. Concurrent `Classify` calls are appropriate for independent
+events or different conversations.
 
 Batch calls accept one metadata object per text. The metadata slice must match
 the number of texts. A nil entry adds no caller fields, but the SDK still
@@ -383,6 +395,14 @@ _, err := fw.ClassifyBatch(ctx,
 )
 ```
 
+Each batch item preserves its own metadata, including exact
+`metadata.conversationId`. Current Cascade treats each batch input
+independently and neither reads nor updates conversation history. Giving items
+the same `metadata.conversationId` does not connect them into a sequence or
+attach them to previously cached history. For conversation-aware checks, use
+ordered individual `Classify` calls and wait for each call before sending the
+next event for that conversation.
+
 ## Errors
 
 - `*firewall.APIError`: returned when the firewall API responds with HTTP status 300 or higher, including redirects that were not followed. Carries `Status`, `StatusText`, a 64 KiB-capped `Body`, and optional `Details` when the body has a `details` object (`Field`, `InputIndex`, `CharOffset`, `MalformedToken`, `CodePoint`, `Reason`). The default error string omits the body.
@@ -397,8 +417,14 @@ All error types satisfy `error` and work with `errors.As`.
 ## Complete events
 
 `Classify` sanitizes invalid UTF-8 and sends the full logical event once. The
-backend owns token-window processing and sequence ordering. `ClassifyBatch`
-continues to send independent stateless texts as one batch request.
+backend owns token-window processing and sequence ordering for those individual
+calls. `ClassifyBatch` sends each text as an independent input in one batch
+request. Per-item metadata, including exact `metadata.conversationId`, is
+preserved, but a batch neither reads nor updates conversation history, even
+when items share a `metadata.conversationId`. For conversation-aware checks,
+send ordered individual `Classify` calls with the same `metadata.conversationId`
+and wait for each call before the next event in that conversation. Concurrent
+calls are appropriate for independent events or different conversations.
 
 ## Batch Classification
 
@@ -424,10 +450,41 @@ if err != nil {
 log.Printf("classified %d items", len(results))
 ```
 
+For conversation-aware checks, send complete events through ordered individual
+`Classify` calls that reuse `metadata.conversationId`, and wait for each call
+before sending the next event for that conversation:
+
+```go
+_, err = fw.Classify(ctx, firstEvent,
+    firewall.WithHook(firewall.HookUserInput),
+    firewall.WithMetadata(firewall.ClassificationMetadata{
+        "conversationId": "conversation-123",
+    }),
+)
+if err != nil {
+    log.Fatal(err)
+}
+_, err = fw.Classify(ctx, nextEvent,
+    firewall.WithHook(firewall.HookToolResponse),
+    firewall.WithToolName("read_file"),
+    firewall.WithMetadata(firewall.ClassificationMetadata{
+        "conversationId": "conversation-123",
+    }),
+)
+if err != nil {
+    log.Fatal(err)
+}
+```
+
 Batch requests carry one SDK metadata object per item so the backend can apply
-tenant-owned thresholding. An empty text slice is an error. Hook, tool-name,
-metadata, and governance slices must match the number of texts when they are
-set.
+tenant-owned thresholding. Each item preserves its own metadata, including
+exact `metadata.conversationId`. Current Cascade treats each input
+independently and neither reads nor updates conversation history. Giving items
+the same `metadata.conversationId` does not connect them into a sequence or
+attach them to previously cached history. Concurrent calls are appropriate for
+independent events or different conversations. An empty text slice is an error.
+Hook, tool-name, metadata, and governance slices must match the number of texts
+when they are set.
 
 ## Migration Notes
 
