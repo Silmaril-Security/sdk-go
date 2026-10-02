@@ -177,8 +177,9 @@ func WithBatchToolNames(names []string) BatchClassifyOption {
 }
 
 // WithBatchMetadata sets one metadata object per text. Length must match texts.
-// A nil metadata entry is serialized as null for that text. Do not mutate the
-// slice or its maps while that ClassifyBatch call is in flight.
+// A nil metadata entry contributes no caller fields; metadata.silmaril still
+// contains SDK-owned provenance for that batch item. Do not mutate the slice
+// or its maps while that ClassifyBatch call is in flight.
 func WithBatchMetadata(metadata []ClassificationMetadata) BatchClassifyOption {
 	return func(c *batchClassifyConfig) {
 		c.metadata = metadata
