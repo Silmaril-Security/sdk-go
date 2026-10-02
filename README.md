@@ -24,7 +24,7 @@ This SDK provides the low-level Go interface for that workflow:
 - Classify user input, tool calls, tool responses, model output, or system
   prompt content.
 - Preserve hook and tool-name context for more accurate decisions.
-- Enforce backend-owned adaptive thresholds and effective Shadow, Warn, or
+- Honor backend threat and governance decisions and effective Shadow, Warn, or
   Block behavior.
 - Send each complete sanitized event in one request.
 - Preserve exact `metadata.conversationId` sequence identity and add one event ID.
@@ -159,7 +159,7 @@ type Options struct {
 }
 ```
 
-`Classify` returns the server's prediction, score, backend-applied threshold,
+`Classify` returns the server's prediction, score, diagnostic threshold,
 and effective mode. When `Mode` is omitted, the backend controls the mode. A
 malicious prediction, or a governance `Action` of `block`, returns a typed
 blocking error only when the effective mode is `firewall.ModeBlock`.
@@ -247,16 +247,17 @@ Outcome taxonomy:
 
 ## Backend Thresholding
 
-Customers do not tune score thresholds in the SDK. Tenant Firewall config owns
-the adaptive threshold schedule and can override the source defaults. Those
-defaults are `base_threshold=0.5`, `target_sequence_fpr=0.01`, and
-`max_adaptive_threshold=0.9`. Under those defaults, 1 scoring opportunity uses
-`0.5`, 2 use about `0.6661`, 5 use about `0.8328`, and 10 or more are capped
-at `0.9`.
+Customers do not tune score thresholds in the SDK. The Firewall backend owns
+the threat decision and threshold policy. The current Cascade backend resolves
+decision thresholds from a tenant default or a hook-specific override; it does
+not raise them as text length, token-window count, batch size, or conversation
+length grows.
 
-The SDK does not send `threshold` in request payloads. The backend owns the
-applied threshold, which remains available on
-`BlockResult.Threshold` and blocking error types as diagnostic metadata.
+The SDK does not send `threshold` in request payloads. `BlockResult.Threshold`
+and the threshold fields on blocking error types are backend-returned
+diagnostic metadata. Disabled and observe policy paths can retain a
+compatibility threshold. Prediction, governance, and the effective mode remain
+the enforcement authority.
 
 ## Modes
 
