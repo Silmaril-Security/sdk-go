@@ -11,8 +11,9 @@ have coordinated disclosure.
 ## Supported Versions
 
 Security fixes target the latest tagged minor release. As of this repository's
-current `VERSION`, that is the `0.5.x` release line. Older release lines may
-receive fixes at maintainer discretion when users cannot upgrade promptly.
+current `VERSION` and the `v0.7.0` tag, that is the `0.7.x` release line.
+Older release lines may receive fixes at maintainer discretion when users
+cannot upgrade promptly.
 
 ## Reporting Guidance
 
