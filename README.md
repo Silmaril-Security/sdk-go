@@ -254,8 +254,9 @@ not raise them as text length, token-window count, batch size, or conversation
 length grows.
 
 The SDK does not send `threshold` in request payloads. `BlockResult.Threshold`
-and the threshold fields on blocking error types are backend-returned
-diagnostic metadata. Disabled and observe policy paths can retain a
+and `FirewallBlockedError.Threshold` are backend-returned diagnostic metadata.
+`BatchFirewallBlockedError` exposes per-item thresholds through
+`Blocked[i].Result.Threshold`. Disabled and observe policy paths can retain a
 compatibility threshold. Prediction, governance, and the effective mode remain
 the enforcement authority.
 
