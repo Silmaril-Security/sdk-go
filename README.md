@@ -383,7 +383,7 @@ _, err := fw.ClassifyBatch(ctx,
 
 ## Errors
 
-- `*firewall.APIError`: returned when the firewall API responds with a non-2xx status, including a redirect the client did not follow. Carries `Status`, `StatusText`, a 64 KiB-capped `Body`, and optional `Details` when the body has a `details` object (`Field`, `InputIndex`, `CharOffset`, `MalformedToken`, `CodePoint`, `Reason`). The default error string omits the body.
+- `*firewall.APIError`: returned when the firewall API responds with HTTP status 300 or higher, including redirects that were not followed. Carries `Status`, `StatusText`, a 64 KiB-capped `Body`, and optional `Details` when the body has a `details` object (`Field`, `InputIndex`, `CharOffset`, `MalformedToken`, `CodePoint`, `Reason`). The default error string omits the body.
 - `*firewall.FirewallBlockedError`: returned by `Classify` when the effective mode is block and the decision is a malicious prediction or a governance block. Also returns the `BlockResult`. Carries `Score`, `Threshold`, `PromptText`, `Hook`, `ToolName`, and `Result`.
 - `*firewall.BatchFirewallBlockedError`: returned by `ClassifyBatch` in that same case for one or more inputs, along with the result slice. Carries each blocked item's index, text, hook, tool name, and result.
 
