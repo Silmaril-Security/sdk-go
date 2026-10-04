@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.1
+
+- Clarifies that a nil `WithBatchMetadata` entry contributes no caller fields
+  while still including SDK-owned provenance in `metadata.silmaril`. Runtime
+  metadata behavior is unchanged.
+
 ## v0.7.0
 
 - Add typed governance context for single and batch classifications. The SDK
