@@ -40,7 +40,7 @@ This SDK is distributed as a Go module.
 go get github.com/Silmaril-Security/sdk-go/firewall@latest
 ```
 
-After the pending v0.7.1 release is tagged, pin it for reproducible installs:
+Pin v0.7.1 for reproducible installs:
 
 ```sh
 go get github.com/Silmaril-Security/sdk-go/firewall@v0.7.1
