@@ -24,8 +24,8 @@ This SDK provides the low-level Go interface for that workflow:
 - Classify user input, tool calls, tool responses, model output, or system
   prompt content.
 - Preserve hook and tool-name context for more accurate decisions.
-- Honor backend threat and governance decisions and effective Shadow, Warn, or
-  Block behavior.
+- Honor backend threat and governance decisions while applying the client's
+  selected Shadow, Warn, or Block behavior.
 - Send each complete sanitized event in one request.
 - Preserve per-item metadata, including exact `metadata.conversationId`, and
   add one event ID. Individual `Classify` calls use that value as sequence
@@ -159,19 +159,23 @@ type Options struct {
     APIURL           string               // required
     Timeout          time.Duration        // default: 10s for the default HTTP client
     HTTPClient       *http.Client         // default: &http.Client{Timeout: Timeout}
-    Mode             firewall.FirewallMode // optional: shadow, warn, or block; omitted uses backend configuration
+    Mode             firewall.FirewallMode // optional: explicitly select shadow, warn, or block
     ShadowMode       bool                 // deprecated: true maps to shadow; use ModeBlock for explicit block
     OnClassify       func(ClassifyEvent)  // optional telemetry callback for classification decisions
 }
 ```
 
-`Classify` returns the server's prediction, score, diagnostic threshold,
-and effective mode. When `Mode` is omitted, the backend controls the mode. A
-malicious prediction, or a governance `Action` of `block`, returns a typed
-blocking error only when the effective mode is `firewall.ModeBlock`.
-`ModeShadow` and `ModeWarn` return the result unchanged. A legacy mode-less
-response leaves `BlockResult.Mode` empty when no override was requested; direct
-SDK calls retain their pre-0.6 Block default internally. `New` rejects an empty
+`Classify` returns the server's prediction, score, and diagnostic threshold.
+Current Firewall responses omit mode, so callers cannot rely on backend mode
+configuration. Set `ModeShadow` or `ModeWarn` on the client or call when you
+want observation without a blocking error; set `ModeBlock` for explicit
+enforcement. An explicit client or per-call mode is locally authoritative,
+including when a future response omits mode or returns a conflicting mode.
+When neither the request nor response supplies mode, `BlockResult.Mode` remains
+empty, while direct `Classify` and `ClassifyBatch` calls retain their pre-0.6
+Block enforcement default internally. A malicious prediction, or a governance
+`Action` of `block`, returns a typed blocking error in Block mode.
+`ModeShadow` and `ModeWarn` return the result unchanged. `New` rejects an empty
 `APIKey` or `APIURL`, a negative `Timeout`, and a `Mode` other than empty,
 `shadow`, `warn`, or `block`.
 
@@ -263,22 +267,28 @@ The SDK does not send `threshold` in request payloads. `BlockResult.Threshold`
 and `FirewallBlockedError.Threshold` are backend-returned diagnostic metadata.
 `BatchFirewallBlockedError` exposes per-item thresholds through
 `Blocked[i].Result.Threshold`. Disabled and observe policy paths can retain a
-compatibility threshold. Prediction, governance, and the effective mode remain
-the enforcement authority.
+compatibility threshold. The backend remains authoritative for prediction,
+governance, and threshold decisions; the SDK's selected mode controls whether a
+threat decision produces a blocking error.
 
 ## Modes
 
-Use `ModeShadow`, `ModeWarn`, or `ModeBlock` only when a request needs to
-override the backend-configured mode. Shadow and Warn preserve the caller's
-flow; Block returns `FirewallBlockedError` or `BatchFirewallBlockedError` for a
-malicious decision. Current backends return the effective mode in
-`BlockResult.Mode`.
+Use `ModeShadow` or `ModeWarn` to select observation explicitly: both preserve
+the caller's flow when the backend returns a malicious prediction or governance
+block. Use `ModeBlock` to return `FirewallBlockedError` or
+`BatchFirewallBlockedError` for those decisions. You can set a client-wide mode
+with `Options.Mode` or use the per-call options below.
 
-During a rolling upgrade, an explicit request mode remains authoritative if a
-legacy or mixed-version backend omits or disagrees about `mode`. When both the
-request and response omit it, `BlockResult.Mode` remains empty; integrations
-can retain their pre-0.6 behavior without falsely reporting a backend Block
-mode. Direct SDK enforcement retains its pre-0.6 Block default.
+The current Gateway contract does not expose a backend mode, and current
+Firewall responses omit it, so omitting mode does not select a
+backend-configured policy.
+`BlockResult.Mode` remains empty when neither the client/call nor the response
+supplies mode, although direct Go calls retain their pre-0.6 Block enforcement
+default internally. An explicit client or per-call mode is locally
+authoritative and is reported in `BlockResult.Mode`, even if a response omits
+mode or returns a conflicting value. For forward compatibility, a future
+mode-returning service can populate `BlockResult.Mode` when no explicit mode
+was requested; this is not current Firewall behavior.
 
 ```go
 fw, err := firewall.New(firewall.Options{

@@ -65,7 +65,7 @@ type BlockResult struct {
 	Prediction Prediction `json:"prediction"`
 	Score      float64    `json:"score"`
 	Threshold  float64    `json:"threshold"`
-	// Mode is empty only when a legacy backend omitted mode and no override was requested.
+	// Mode is empty when the response omits mode and no client or per-call mode was set.
 	Mode           FirewallMode               `json:"mode,omitempty"`
 	PrimaryOutcome PrimaryOutcome             `json:"primary_outcome,omitempty"`
 	OutcomeScores  map[HarmfulOutcome]float64 `json:"outcome_scores,omitempty"`
@@ -135,7 +135,7 @@ func WithGovernance(context GovernanceContext) ClassifyOption {
 	return func(c *classifyConfig) { c.governance = &context }
 }
 
-// WithMode overrides the backend-controlled mode for a single Classify call.
+// WithMode sets the locally authoritative mode for a single Classify call.
 func WithMode(mode FirewallMode) ClassifyOption {
 	return func(c *classifyConfig) { c.mode = &mode }
 }
@@ -194,7 +194,7 @@ func WithBatchGovernance(contexts []*GovernanceContext) BatchClassifyOption {
 	return func(c *batchClassifyConfig) { c.governance = contexts }
 }
 
-// WithBatchMode overrides the backend-controlled mode for one ClassifyBatch call.
+// WithBatchMode sets the locally authoritative mode for one ClassifyBatch call.
 func WithBatchMode(mode FirewallMode) BatchClassifyOption {
 	return func(c *batchClassifyConfig) { c.mode = &mode }
 }
