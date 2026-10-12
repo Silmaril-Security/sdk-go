@@ -40,10 +40,10 @@ This SDK is distributed as a Go module.
 go get github.com/Silmaril-Security/sdk-go/firewall@latest
 ```
 
-Pin v0.7.1 for reproducible installs:
+Pin v0.7.2 for reproducible installs:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.7.1
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.7.2
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves

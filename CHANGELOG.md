@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.7.2
+
+- Corrects the mode documentation for the current `/classify` wire contract:
+  responses omit mode, so mode-less calls leave `BlockResult.Mode` empty and
+  retain the SDK's local Block enforcement fallback.
+- Documents that callers must explicitly select `ModeShadow` or `ModeWarn` for
+  observation-only behavior, or `ModeBlock` for explicit enforcement. Runtime
+  behavior is unchanged.
+
 ## v0.7.1
 
 - Clarifies that a nil `WithBatchMetadata` entry contributes no caller fields
