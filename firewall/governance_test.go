@@ -28,11 +28,18 @@ func TestGovernanceSingleAndLegacy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resource := GovernanceContext{Agent: "agent-1", Resource: &GovernanceResource{Kind: GovernanceTool, ID: "search", ParentID: "server-1"}}
+	resource := GovernanceContext{Agent: "agent-1", Resource: &GovernanceResource{Kind: GovernanceMCPTool, ID: "search", ParentID: "server-1"}}
 	result, err := fw.Classify(context.Background(), "search", WithGovernance(resource))
 	var blocked *FirewallBlockedError
 	if !errors.As(err, &blocked) || result.Governance == nil || result.Governance.RuleID != "rule-1" {
 		t.Fatalf("result=%+v error=%v", result, err)
+	}
+	canonical := sent[0]["resource"].(map[string]any)
+	if canonical["kind"] != "mcp_tool" || canonical["id"] != "search" || canonical["parent_id"] != "server-1" {
+		t.Fatalf("resource wire=%#v", canonical)
+	}
+	if _, ok := sent[0]["agent"]; ok {
+		t.Fatal("caller agent must remain attribution only")
 	}
 	got := sent[0]["metadata"].(map[string]any)["silmaril"].(map[string]any)["governance"].(map[string]any)
 	if got["agent"] != "agent-1" || got["resource"].(map[string]any)["parent_id"] != "server-1" {
@@ -49,6 +56,10 @@ func TestGovernanceBatchWireAndLength(t *testing.T) {
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
+		}
+		resources := body["resources"].([]any)
+		if len(resources) != 2 || resources[0] != nil || resources[1] != nil {
+			t.Errorf("resources=%#v", resources)
 		}
 		metadata := body["metadata"].([]any)
 		first := metadata[0].(map[string]any)["silmaril"].(map[string]any)

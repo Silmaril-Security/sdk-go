@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.3
+
+- Send typed governance resources in the runtime's top-level `resource` and
+  aligned `resources` fields, preserving compatibility attribution metadata.
+- Reject invalid canonical resource references before submitting a request.
+  Caller-supplied agent metadata remains attribution, not authenticated identity.
+
 ## v0.7.2
 
 - Corrects the mode documentation for the current `/classify` wire contract:
