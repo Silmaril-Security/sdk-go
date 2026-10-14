@@ -6,9 +6,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 type singleRequestPayload struct {
+	Resource *GovernanceResource     `json:"resource,omitempty"`
 	Text     string                  `json:"text"`
 	Mode     FirewallMode            `json:"mode,omitempty"`
 	Hook     HookLabel               `json:"hook,omitempty"`
@@ -17,6 +19,7 @@ type singleRequestPayload struct {
 }
 
 type batchRequestPayload struct {
+	Resources []*GovernanceResource     `json:"resources,omitempty"`
 	Texts     []string                  `json:"texts"`
 	Mode      FirewallMode              `json:"mode,omitempty"`
 	Hooks     []HookLabel               `json:"hooks,omitempty"`
@@ -67,13 +70,41 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 	return result, nil
 }
 
+func requestGovernanceResource(context *GovernanceContext) (*GovernanceResource, error) {
+	if context == nil || context.Resource == nil {
+		return nil, nil
+	}
+	resource := *context.Resource
+	switch resource.Kind {
+	case GovernanceAgent, GovernanceTool, GovernanceMCPServer, GovernanceMCPTool, GovernancePlugin, GovernanceSkill, GovernanceExtension:
+	default:
+		return nil, errors.New("firewall: invalid governance resource kind")
+	}
+	if strings.TrimSpace(resource.ID) == "" {
+		return nil, errors.New("firewall: governance resource id must be non-empty")
+	}
+	if resource.Kind == GovernanceMCPTool {
+		if strings.TrimSpace(resource.ParentID) == "" {
+			return nil, errors.New("firewall: mcp_tool requires a non-empty parent_id")
+		}
+	} else if resource.ParentID != "" {
+		return nil, errors.New("firewall: parent_id is valid only for mcp_tool")
+	}
+	return &resource, nil
+}
+
 func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg classifyConfig) (BlockResult, error) {
 	metadata, err := sdkMetadata(cfg.metadata, cfg.requestID, nil)
 	if err != nil {
 		return BlockResult{}, err
 	}
+	resource, err := requestGovernanceResource(cfg.governance)
+	if err != nil {
+		return BlockResult{}, err
+	}
 	setGovernanceMetadata(metadata, cfg.governance)
 	payload := singleRequestPayload{
+		Resource: resource,
 		Text:     text,
 		Metadata: metadata,
 	}
@@ -166,6 +197,16 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 		return nil, err
 	}
 	payload.Metadata = metadata
+	if cfg.governance != nil {
+		payload.Resources = make([]*GovernanceResource, len(texts))
+		for i, context := range cfg.governance {
+			resource, err := requestGovernanceResource(context)
+			if err != nil {
+				return nil, err
+			}
+			payload.Resources[i] = resource
+		}
+	}
 	var resp batchResponse
 	if err := f.postJSON(ctx, payload, &resp); err != nil {
 		return nil, err
