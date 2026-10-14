@@ -40,10 +40,10 @@ This SDK is distributed as a Go module.
 go get github.com/Silmaril-Security/sdk-go/firewall@latest
 ```
 
-Pin v0.7.3 for reproducible installs:
+Pin v0.7.2 for reproducible installs:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.7.3
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.7.2
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -527,10 +527,14 @@ otherwise.
 This SDK is source-available under the Silmaril SDK Source-Available License.
 It is not permissive open source. See [LICENSE](LICENSE).
 
-## Governance resource requests
+## Governance resource requests (unreleased source)
 
 Typed governance resources are sent in the classify request's top-level
 `resource` field or aligned nullable `resources` array for batch calls. Resource
 IDs must be non-empty; MCP tools also require their canonical server parent ID.
 The compatibility metadata copy remains attribution only. Caller agent metadata
 does not supply an authenticated principal.
+
+These resource-wire corrections are unreleased. Version metadata and the
+install command still identify the current published package. Publish a new
+version through the normal release process before using this fix from a registry.

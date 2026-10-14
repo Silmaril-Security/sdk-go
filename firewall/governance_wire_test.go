@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -39,11 +40,31 @@ func TestTypedResourcePolicyAndAttributionBoundary(t *testing.T) {
 		t.Fatalf("metadata must not supply canonical identity: %v", err)
 	}
 }
-func TestRequestResourceValidation(t *testing.T) {
+func TestRequestResourceValidationBeforeTransport(t *testing.T) {
 	for _, resource := range []GovernanceResource{{Kind: GovernancePlugin}, {Kind: GovernancePlugin, ID: " "}, {Kind: GovernanceMCPTool, ID: "tool"}, {Kind: GovernanceTool, ID: "tool", ParentID: "server"}, {Kind: "unknown", ID: "tool"}} {
-		if _, err := requestGovernanceResource(&GovernanceContext{Resource: &resource}); err == nil {
-			t.Errorf("accepted invalid resource %+v", resource)
-		}
+		t.Run(string(resource.Kind)+resource.ID+resource.ParentID, func(t *testing.T) {
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			defer server.Close()
+			fw, err := New(Options{APIKey: "sk-test", APIURL: server.URL})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := fw.Classify(context.Background(), "synthetic", WithGovernance(GovernanceContext{Resource: &resource})); err == nil {
+				t.Error("single request accepted invalid canonical resource")
+			}
+			valid := &GovernanceContext{Resource: &GovernanceResource{Kind: GovernancePlugin, ID: "valid-plugin"}}
+			invalid := &GovernanceContext{Resource: &resource}
+			if _, err := fw.ClassifyBatch(context.Background(), []string{"valid", "invalid"}, WithBatchGovernance([]*GovernanceContext{valid, invalid})); err == nil {
+				t.Error("batch request accepted invalid canonical resource")
+			}
+			if requests.Load() != 0 {
+				t.Errorf("invalid resource reached HTTP transport %d times", requests.Load())
+			}
+		})
 	}
 }
 func TestNullableBatchResourceOrder(t *testing.T) {
