@@ -55,9 +55,12 @@ type GovernanceContext struct {
 }
 
 type GovernanceDecision struct {
-	Action        GovernanceAction `json:"action"`
-	PolicyVersion string           `json:"policy_version"`
-	RuleID        string           `json:"rule_id,omitempty"`
+	Action           GovernanceAction    `json:"action"`
+	PolicyVersion    string              `json:"policy_version"`
+	RuleID           string              `json:"rule_id,omitempty"`
+	Resource         *GovernanceResource `json:"resource,omitempty"`
+	IdentityRevision string              `json:"identity_revision,omitempty"`
+	Reason           string              `json:"reason,omitempty"`
 }
 
 // BlockResult is the output of a single classification call.

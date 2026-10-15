@@ -67,6 +67,21 @@ func TestRequestResourceValidationBeforeTransport(t *testing.T) {
 		})
 	}
 }
+
+func TestResponseResourceValidation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"prediction":"BENIGN","score":0.1,"governance":{"action":"allow","policy_version":"schema6","resource":{"kind":"mcp_tool","id":"search"}}}`))
+	}))
+	defer server.Close()
+	fw, err := New(Options{APIKey: "sk-test", APIURL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fw.Classify(context.Background(), "synthetic"); err == nil {
+		t.Fatal("response accepted an invalid canonical governance resource")
+	}
+}
+
 func TestNullableBatchResourceOrder(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any

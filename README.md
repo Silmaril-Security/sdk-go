@@ -181,9 +181,15 @@ Block enforcement default internally. A malicious prediction, or a governance
 
 `BlockResult.Governance` is nil when the response omits it. Otherwise it holds
 `Action`, `PolicyVersion`, and optional `RuleID` (`action`, `policy_version`,
-and `rule_id` on the wire). A non-nil decision whose `Action` is not `allow`
-or `block`, or whose `PolicyVersion` is empty, is an error. `Action` `block`
-sets `ClassifyEvent.Blocked` even when `Prediction` is benign.
+and `rule_id` on the wire). Runtimes that support governance response evidence
+may also return optional `Resource`, `IdentityRevision`, and `Reason`
+(`resource`, `identity_revision`, and `reason`). `Resource` uses the same
+`kind`, `id`, and `parent_id` shape as `GovernanceResource`; `Reason` is an
+open string so newer runtime reasons are preserved. Older runtimes may omit
+these fields or return null, which leaves their Go values nil or empty. A
+non-nil decision whose `Action` is not `allow` or `block`, whose
+`PolicyVersion` is empty, or whose returned resource is invalid is an error.
+`Action` `block` sets `ClassifyEvent.Blocked` even when `Prediction` is benign.
 `WithGovernance` and `WithBatchGovernance` send optional `Agent` and `Resource`
 context under `metadata.silmaril.governance` (`agent`, and `resource` with
 `kind`, `id`, and `parent_id`). Resource kinds are `agent`, `tool`,
