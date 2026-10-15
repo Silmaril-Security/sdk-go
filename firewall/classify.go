@@ -75,22 +75,29 @@ func requestGovernanceResource(context *GovernanceContext) (*GovernanceResource,
 		return nil, nil
 	}
 	resource := *context.Resource
+	if err := validateGovernanceResource(resource); err != nil {
+		return nil, fmt.Errorf("firewall: %w", err)
+	}
+	return &resource, nil
+}
+
+func validateGovernanceResource(resource GovernanceResource) error {
 	switch resource.Kind {
 	case GovernanceAgent, GovernanceTool, GovernanceMCPServer, GovernanceMCPTool, GovernancePlugin, GovernanceSkill, GovernanceExtension:
 	default:
-		return nil, errors.New("firewall: invalid governance resource kind")
+		return errors.New("invalid governance resource kind")
 	}
 	if strings.TrimSpace(resource.ID) == "" {
-		return nil, errors.New("firewall: governance resource id must be non-empty")
+		return errors.New("governance resource id must be non-empty")
 	}
 	if resource.Kind == GovernanceMCPTool {
 		if strings.TrimSpace(resource.ParentID) == "" {
-			return nil, errors.New("firewall: mcp_tool requires a non-empty parent_id")
+			return errors.New("mcp_tool requires a non-empty parent_id")
 		}
 	} else if resource.ParentID != "" {
-		return nil, errors.New("firewall: parent_id is valid only for mcp_tool")
+		return errors.New("parent_id is valid only for mcp_tool")
 	}
-	return &resource, nil
+	return nil
 }
 
 func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg classifyConfig) (BlockResult, error) {
@@ -380,6 +387,11 @@ func blockResultFromResponse(resp singleResponse, requestedMode ...FirewallMode)
 		}
 		if resp.Governance.PolicyVersion == "" {
 			return BlockResult{}, fmt.Errorf("firewall: response governance policy_version must be non-empty")
+		}
+		if resp.Governance.Resource != nil {
+			if err := validateGovernanceResource(*resp.Governance.Resource); err != nil {
+				return BlockResult{}, fmt.Errorf("firewall: response %w", err)
+			}
 		}
 	}
 	mode := resp.Mode
