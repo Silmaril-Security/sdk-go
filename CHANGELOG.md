@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.7.4
+
 - Preserve optional governance response evidence for single and batch
   classifications: the canonical resource, identity revision, and open-ended
   reason string. Legacy responses that omit or null these fields remain
