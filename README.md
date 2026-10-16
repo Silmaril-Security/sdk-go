@@ -40,10 +40,10 @@ This SDK is distributed as a Go module.
 go get github.com/Silmaril-Security/sdk-go/firewall@latest
 ```
 
-Pin v0.7.3 for reproducible installs:
+Pin v0.7.4 for reproducible installs:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.7.3
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.7.4
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -541,6 +541,6 @@ IDs must be non-empty; MCP tools also require their canonical server parent ID.
 The compatibility metadata copy remains attribution only. Caller agent metadata
 does not supply an authenticated principal.
 
-This source prepares version 0.7.3. Its registry install command becomes
+This source prepares version 0.7.4. Its registry install command becomes
 available after the authorized main-branch release workflow publishes the package.
 Confirm registry publication before installing this version.
