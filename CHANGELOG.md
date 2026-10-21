@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.7.5
 
 - Add optional `review` on `Classify` and `ClassifyBatch`: `ReviewStandard`
   (`standard`) or `ReviewDeep` (`deep`). An omitted client option and omitted
