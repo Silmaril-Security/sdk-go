@@ -42,10 +42,10 @@ This SDK is distributed as a Go module.
 go get github.com/Silmaril-Security/sdk-go/firewall@latest
 ```
 
-Pin v0.7.4 for reproducible installs:
+Pin v0.7.5 for reproducible installs:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.7.4
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.7.5
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -350,8 +350,8 @@ governance block. Only effective Block mode raises a blocking error.
 
 ## Review
 
-This capability is source-prepared and Unreleased. Deploy backend support
-before using it.
+Review selection is available starting with Go SDK v0.7.5. Deploy compatible
+Firewall support before using an explicit selection.
 
 `review` is a top-level `/classify` field with exact values `standard` and
 `deep`. Omitting it does not send a default: the selected tenant or surface
@@ -604,6 +604,6 @@ IDs must be non-empty; MCP tools also require their canonical server parent ID.
 The compatibility metadata copy remains attribution only. Caller agent metadata
 does not supply an authenticated principal.
 
-This source prepares version 0.7.4. Its registry install command becomes
+This source prepares version 0.7.5. Its registry install command becomes
 available after the authorized main-branch release workflow publishes the package.
 Confirm registry publication before installing this version.
