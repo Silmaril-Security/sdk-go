@@ -305,6 +305,9 @@ func TestClassifyNoOptionsOmitsHookAndToolName(t *testing.T) {
 	if _, ok := raw["threshold"]; ok {
 		t.Errorf("threshold should be omitted: %v", raw)
 	}
+	if _, ok := raw["review"]; ok {
+		t.Errorf("review should be omitted: %v", raw)
+	}
 	if _, ok := raw["metadata"].(map[string]any)["silmaril"]; !ok {
 		t.Errorf("metadata.silmaril should be present: %v", raw)
 	}

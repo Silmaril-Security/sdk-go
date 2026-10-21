@@ -16,6 +16,7 @@ type singleRequestPayload struct {
 	Hook     HookLabel               `json:"hook,omitempty"`
 	ToolName string                  `json:"tool_name,omitempty"`
 	Metadata *ClassificationMetadata `json:"metadata,omitempty"`
+	Review   *ReviewLevel            `json:"review,omitempty"`
 }
 
 type batchRequestPayload struct {
@@ -25,6 +26,7 @@ type batchRequestPayload struct {
 	Hooks     []HookLabel               `json:"hooks,omitempty"`
 	ToolNames []*string                 `json:"tool_names,omitempty"`
 	Metadata  []*ClassificationMetadata `json:"metadata,omitempty"`
+	Review    *ReviewLevel              `json:"review,omitempty"`
 }
 
 type singleResponse struct {
@@ -37,10 +39,15 @@ type singleResponse struct {
 	DetectorScores map[string]float64  `json:"detector_scores"`
 	DetectorCounts map[string]int      `json:"detector_counts"`
 	Governance     *GovernanceDecision `json:"governance"`
+	// Review stays loosely typed. Explicit selections require an exact string
+	// acknowledgement; any other JSON value is a compatibility error. Omitted
+	// selections ignore the field, including unexpected types.
+	Review any `json:"review,omitempty"`
 }
 
 type batchResponse struct {
 	Predictions []singleResponse `json:"predictions"`
+	Review      any              `json:"review,omitempty"`
 }
 
 // Classify classifies one complete logical event in a single request.
@@ -58,6 +65,11 @@ func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOp
 		return BlockResult{}, err
 	}
 	cfg.mode = &mode
+	review, err := f.effectiveReview(cfg.review)
+	if err != nil {
+		return BlockResult{}, err
+	}
+	cfg.review = review
 	result, err := f.classifySingleRaw(ctx, text, cfg)
 	if err != nil {
 		return BlockResult{}, err
@@ -124,11 +136,22 @@ func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg class
 	if cfg.toolName != "" {
 		payload.ToolName = cfg.toolName
 	}
+	payload.Review = cfg.review
 	var resp singleResponse
 	if err := f.postJSON(ctx, payload, &resp); err != nil {
 		return BlockResult{}, err
 	}
-	return blockResultFromResponse(resp, payload.Mode)
+	if err := verifyReviewAcknowledgement(cfg.review, resp.Review); err != nil {
+		return BlockResult{}, err
+	}
+	result, err := blockResultFromResponse(resp, payload.Mode)
+	if err != nil {
+		return BlockResult{}, err
+	}
+	if cfg.review != nil {
+		result.Review = *cfg.review
+	}
+	return result, nil
 }
 
 // ClassifyBatch classifies multiple independent texts in a single request.
@@ -147,6 +170,11 @@ func (f *Firewall) ClassifyBatch(ctx context.Context, texts []string, opts ...Ba
 		return nil, err
 	}
 	cfg.mode = &mode
+	review, err := f.effectiveReview(cfg.review)
+	if err != nil {
+		return nil, err
+	}
+	cfg.review = review
 	results, err := f.classifyBatchRaw(ctx, texts, cfg)
 	if err != nil {
 		return nil, err
@@ -204,6 +232,7 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 		return nil, err
 	}
 	payload.Metadata = metadata
+	payload.Review = cfg.review
 	if cfg.governance != nil {
 		payload.Resources = make([]*GovernanceResource, len(texts))
 		for i, context := range cfg.governance {
@@ -218,6 +247,9 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 	if err := f.postJSON(ctx, payload, &resp); err != nil {
 		return nil, err
 	}
+	if err := verifyReviewAcknowledgement(cfg.review, resp.Review); err != nil {
+		return nil, err
+	}
 	if len(resp.Predictions) != len(texts) {
 		return nil, fmt.Errorf("firewall: predictions length %d does not match texts length %d", len(resp.Predictions), len(texts))
 	}
@@ -226,6 +258,9 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 		result, err := blockResultFromResponse(p, payload.Mode)
 		if err != nil {
 			return nil, err
+		}
+		if cfg.review != nil {
+			result.Review = *cfg.review
 		}
 		results[i] = result
 	}
@@ -260,6 +295,45 @@ func validateMode(mode FirewallMode) error {
 	default:
 		return fmt.Errorf("firewall: mode must be shadow, warn, or block, got %q", mode)
 	}
+}
+
+func validateReview(review ReviewLevel) error {
+	switch review {
+	case ReviewStandard, ReviewDeep:
+		return nil
+	default:
+		return fmt.Errorf("firewall: review must be standard or deep, got %q", review)
+	}
+}
+
+func (f *Firewall) effectiveReview(review *ReviewLevel) (*ReviewLevel, error) {
+	if review != nil {
+		if err := validateReview(*review); err != nil {
+			return nil, err
+		}
+		selected := *review
+		return &selected, nil
+	}
+	if f.review == "" {
+		return nil, nil
+	}
+	selected := f.review
+	return &selected, nil
+}
+
+func verifyReviewAcknowledgement(requested *ReviewLevel, acknowledged any) error {
+	if requested == nil {
+		return nil
+	}
+	got, ok := acknowledged.(string)
+	if ok && ReviewLevel(got) == *requested {
+		return nil
+	}
+	var echoed ReviewLevel
+	if ok {
+		echoed = ReviewLevel(got)
+	}
+	return &ReviewCompatibilityError{Requested: *requested, Acknowledged: echoed}
 }
 
 func legacyMode(shadowMode bool) FirewallMode {

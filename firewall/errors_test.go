@@ -29,3 +29,17 @@ func TestAPIErrorAs(t *testing.T) {
 		t.Errorf("Status = %v", apiErr.Status)
 	}
 }
+
+func TestReviewCompatibilityErrorAs(t *testing.T) {
+	var err error = &ReviewCompatibilityError{Requested: ReviewDeep, Acknowledged: ReviewStandard}
+	var compat *ReviewCompatibilityError
+	if !errors.As(err, &compat) {
+		t.Fatal("errors.As failed")
+	}
+	if compat.Requested != ReviewDeep || compat.Acknowledged != ReviewStandard {
+		t.Errorf("fields = %+v", compat)
+	}
+	if !strings.Contains(err.Error(), "standard") || !strings.Contains(err.Error(), "deep") {
+		t.Errorf("Error() = %q", err.Error())
+	}
+}

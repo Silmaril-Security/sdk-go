@@ -34,6 +34,7 @@ type Firewall struct {
 	retryBaseBackoff time.Duration
 	retryMaxBackoff  time.Duration
 	retryJitter      func(time.Duration) time.Duration
+	review           ReviewLevel
 }
 
 // New constructs a Firewall from Options. Returns an error when APIKey or
@@ -51,6 +52,11 @@ func New(opts Options) (*Firewall, error) {
 	}
 	if err := validateMode(mode); err != nil {
 		return nil, err
+	}
+	if opts.Review != "" {
+		if err := validateReview(opts.Review); err != nil {
+			return nil, err
+		}
 	}
 	timeout := opts.Timeout
 	if timeout < 0 {
@@ -83,6 +89,7 @@ func New(opts Options) (*Firewall, error) {
 		retryBaseBackoff: time.Second,
 		retryMaxBackoff:  30 * time.Second,
 		retryJitter:      fullJitter,
+		review:           opts.Review,
 	}, nil
 }
 

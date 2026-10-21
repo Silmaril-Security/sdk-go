@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Add optional `review` on `Classify` and `ClassifyBatch`: `ReviewStandard`
+  (`standard`) or `ReviewDeep` (`deep`). An omitted client option and omitted
+  per-call option leave the wire field unset so tenant AppConfig
+  `threat_judge.enabled` remains authoritative. Per-call `WithReview` /
+  `WithBatchReview` override `Options.Review`.
+- Verify the top-level response acknowledgement before callbacks or blocking
+  errors. A missing, non-string, or mismatched acknowledgement returns
+  `ReviewCompatibilityError`. That error does not schedule another attempt.
+
 ## v0.7.4
 
 - Preserve optional governance response evidence for single and batch
