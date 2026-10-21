@@ -390,6 +390,159 @@ func TestClassifyBatchReviewAckUsesEnvelopeNotPredictions(t *testing.T) {
 	}
 }
 
+func TestClassifyMatchingReviewAckPreservesBlockEnforcement(t *testing.T) {
+	reviews := []ReviewLevel{ReviewStandard, ReviewDeep}
+	for _, review := range reviews {
+		review := review
+		t.Run("single/"+string(review), func(t *testing.T) {
+			var calls atomic.Int32
+			var payload singleRequestPayload
+			var events []ClassifyEvent
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Error(err)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(singleResponse{
+					Prediction: PredictionMalicious,
+					Score:      0.91,
+					Threshold:  0.5,
+					Review:     reviewLevelPtr(review),
+				})
+			}))
+			defer ts.Close()
+
+			fw, err := New(Options{
+				APIKey: "sk",
+				APIURL: ts.URL,
+				Mode:   ModeBlock,
+				OnClassify: func(event ClassifyEvent) {
+					events = append(events, event)
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := fw.Classify(context.Background(), "attack",
+				WithReview(review),
+				WithMode(ModeBlock),
+				WithHook(HookUserInput),
+			)
+			var blocked *FirewallBlockedError
+			if !errors.As(err, &blocked) {
+				t.Fatalf("error = %v, want FirewallBlockedError", err)
+			}
+			var compat *ReviewCompatibilityError
+			if errors.As(err, &compat) {
+				t.Fatal("matching acknowledgement must not return ReviewCompatibilityError")
+			}
+			if calls.Load() != 1 {
+				t.Fatalf("HTTP calls = %d, want 1", calls.Load())
+			}
+			if payload.Review == nil || *payload.Review != review {
+				t.Fatalf("request review = %#v, want %q", payload.Review, review)
+			}
+			if result.Review != review || result.Prediction != PredictionMalicious || result.Score != 0.91 {
+				t.Fatalf("returned result = %+v", result)
+			}
+			if blocked.Result.Review != review || blocked.Result.Prediction != PredictionMalicious || blocked.Result.Score != 0.91 {
+				t.Fatalf("blocked.Result = %+v", blocked.Result)
+			}
+			if blocked.PromptText != "attack" || blocked.Hook != HookUserInput {
+				t.Fatalf("blocked evidence = %+v", blocked)
+			}
+			if len(events) != 1 {
+				t.Fatalf("events = %d, want 1", len(events))
+			}
+			if !events[0].Blocked || events[0].Mode != ModeBlock || events[0].Result.Review != review {
+				t.Fatalf("event = %+v", events[0])
+			}
+		})
+
+		t.Run("batch/"+string(review), func(t *testing.T) {
+			var calls atomic.Int32
+			var payload batchRequestPayload
+			var events []ClassifyEvent
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+					t.Error(err)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(batchResponse{
+					Review: reviewLevelPtr(review),
+					Predictions: []singleResponse{
+						{Prediction: PredictionBenign, Score: 0.12, Threshold: 0.5},
+						{Prediction: PredictionMalicious, Score: 0.88, Threshold: 0.5},
+					},
+				})
+			}))
+			defer ts.Close()
+
+			fw, err := New(Options{
+				APIKey: "sk",
+				APIURL: ts.URL,
+				Mode:   ModeBlock,
+				OnClassify: func(event ClassifyEvent) {
+					events = append(events, event)
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			results, err := fw.ClassifyBatch(context.Background(),
+				[]string{"safe", "attack"},
+				WithBatchReview(review),
+				WithBatchMode(ModeBlock),
+				WithBatchHooks([]HookLabel{HookUserInput, HookToolResponse}),
+			)
+			var blocked *BatchFirewallBlockedError
+			if !errors.As(err, &blocked) {
+				t.Fatalf("error = %v, want BatchFirewallBlockedError", err)
+			}
+			var compat *ReviewCompatibilityError
+			if errors.As(err, &compat) {
+				t.Fatal("matching acknowledgement must not return ReviewCompatibilityError")
+			}
+			if calls.Load() != 1 {
+				t.Fatalf("HTTP calls = %d, want 1", calls.Load())
+			}
+			if payload.Review == nil || *payload.Review != review {
+				t.Fatalf("request review = %#v, want %q", payload.Review, review)
+			}
+			if len(results) != 2 {
+				t.Fatalf("results = %d, want 2", len(results))
+			}
+			if results[0].Review != review || results[0].Prediction != PredictionBenign || results[0].Score != 0.12 {
+				t.Fatalf("benign result = %+v", results[0])
+			}
+			if results[1].Review != review || results[1].Prediction != PredictionMalicious || results[1].Score != 0.88 {
+				t.Fatalf("malicious result = %+v", results[1])
+			}
+			if len(blocked.Blocked) != 1 {
+				t.Fatalf("blocked items = %d, want 1 malicious item", len(blocked.Blocked))
+			}
+			item := blocked.Blocked[0]
+			if item.Index != 1 || item.Text != "attack" || item.Hook != HookToolResponse {
+				t.Fatalf("blocked item = %+v", item)
+			}
+			if item.Result.Review != review || item.Result.Prediction != PredictionMalicious || item.Result.Score != 0.88 {
+				t.Fatalf("blocked item result = %+v", item.Result)
+			}
+			if len(events) != 2 {
+				t.Fatalf("events = %d, want 2", len(events))
+			}
+			if events[0].Blocked || events[0].Text != "safe" || events[0].Result.Review != review {
+				t.Fatalf("benign event = %+v", events[0])
+			}
+			if !events[1].Blocked || events[1].Mode != ModeBlock || events[1].Text != "attack" || events[1].Result.Review != review {
+				t.Fatalf("malicious event = %+v", events[1])
+			}
+		})
+	}
+}
+
 func TestClassifyRetriesPreserveReview(t *testing.T) {
 	var calls atomic.Int32
 	var reviews []any
