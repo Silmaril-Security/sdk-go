@@ -31,6 +31,8 @@ This SDK provides the low-level Go interface for that workflow:
   add one event ID. Individual `Classify` calls use that value as sequence
   identity.
 - Retry transient API Gateway and model-serving failures.
+- Optionally select `standard` or `deep` review for a request. Omitting review
+  leaves the backend AppConfig judge setting in control.
 
 ## Install
 
@@ -162,6 +164,7 @@ type Options struct {
     Mode             firewall.FirewallMode // optional: explicitly select shadow, warn, or block
     ShadowMode       bool                 // deprecated: true maps to shadow; use ModeBlock for explicit block
     OnClassify       func(ClassifyEvent)  // optional telemetry callback for classification decisions
+    Review           firewall.ReviewLevel // optional: standard or deep; empty omits the wire field
 }
 ```
 
@@ -176,8 +179,9 @@ empty, while direct `Classify` and `ClassifyBatch` calls retain their pre-0.6
 Block enforcement default internally. A malicious prediction, or a governance
 `Action` of `block`, returns a typed blocking error in Block mode.
 `ModeShadow` and `ModeWarn` return the result unchanged. `New` rejects an empty
-`APIKey` or `APIURL`, a negative `Timeout`, and a `Mode` other than empty,
-`shadow`, `warn`, or `block`.
+`APIKey` or `APIURL`, a negative `Timeout`, a `Mode` other than empty,
+`shadow`, `warn`, or `block`, and a nonempty `Review` other than `standard` or
+`deep`.
 
 `BlockResult.Governance` is nil when the response omits it. Otherwise it holds
 `Action`, `PolicyVersion`, and optional `RuleID` (`action`, `policy_version`,
@@ -344,6 +348,64 @@ precedence. Because an omitted Go `bool` is indistinguishable from `false`, use
 `Mode`, and `ShadowMode`. `Blocked` is true for a malicious prediction or a
 governance block. Only effective Block mode raises a blocking error.
 
+## Review
+
+This capability is source-prepared and Unreleased. Deploy backend support
+before using it.
+
+`review` is a top-level `/classify` field with exact values `standard` and
+`deep`. Omitting it does not send a default: the selected tenant or surface
+AppConfig `threat_judge.enabled` remains in control. `standard` disables the
+optional large-judge stage for that request. `deep` enables it using
+server-owned judge configuration. The SDK does not accept model, prompt, or
+timeout overrides.
+
+Deep review remains a second opinion on eligible Qwen threat candidates; it
+does not force a large-model call for every event. Review and enforcement
+mode are independent. Removing the server judge configuration prevents
+clients from selecting deep review.
+
+There is no capability-discovery API. An explicit selection is confirmed only
+when the successful response returns that same string at the top level: on the
+single result, and on the batch envelope rather than only on individual
+predictions. That acknowledgement reports the applied setting, not whether the
+judge ran. `deep` requires a configured judge and an active Cascade; otherwise
+the API returns HTTP 400 before inference. `standard` is valid without a
+judge. An authenticated client may still send `deep` when AppConfig has
+`enabled: false`.
+
+Callers that omit `Options.Review`, `WithReview`, and `WithBatchReview` keep
+the previous request and response shape. An explicit selection is sent as
+top-level `review` on both single and batch requests.
+
+Per-call options override `Options.Review`. An empty per-call value is an
+error; it does not clear the client default or restore server authority. This
+package has no extra adapter option layer; any helper that uses the same
+`Firewall` inherits that client's default.
+
+`Classify` and `ClassifyBatch`:
+
+```go
+_, err = fw.Classify(ctx, text,
+    firewall.WithHook(firewall.HookUserInput),
+)
+
+_, err = fw.Classify(ctx, text,
+    firewall.WithHook(firewall.HookUserInput),
+    firewall.WithReview(firewall.ReviewStandard),
+)
+
+_, err = fw.ClassifyBatch(ctx, texts,
+    firewall.WithBatchReview(firewall.ReviewDeep),
+)
+```
+
+The SDK checks that top-level acknowledgement before `OnClassify` or a blocking
+error. A missing, non-string, or unequal value is `ReviewCompatibilityError`.
+That error does not schedule another attempt. Transient HTTP failures can
+still be retried before the successful response is checked. Do not infer
+support from metadata or nested prediction fields.
+
 ## Hook labels
 
 ```go
@@ -424,6 +486,7 @@ next event for that conversation.
 - `*firewall.APIError`: returned when the firewall API responds with HTTP status 300 or higher, including redirects that were not followed. Carries `Status`, `StatusText`, a 64 KiB-capped `Body`, and optional `Details` when the body has a `details` object (`Field`, `InputIndex`, `CharOffset`, `MalformedToken`, `CodePoint`, `Reason`). The default error string omits the body.
 - `*firewall.FirewallBlockedError`: returned by `Classify` when the effective mode is block and the decision is a malicious prediction or a governance block. Also returns the `BlockResult`. Carries `Score`, `Threshold`, `PromptText`, `Hook`, `ToolName`, and `Result`.
 - `*firewall.BatchFirewallBlockedError`: returned by `ClassifyBatch` in that same case for one or more inputs, along with the result slice. Carries each blocked item's index, text, hook, tool name, and result.
+- `*firewall.ReviewCompatibilityError`: returned when an explicit `review` selection is missing from the top-level response, is not a string, or does not equal the requested `standard` or `deep` string. Carries `Requested` and `Acknowledged`. That error does not schedule another attempt.
 
 `PromptBlockedError` and `BatchPromptBlockedError` remain deprecated aliases of
 those types.

@@ -24,6 +24,17 @@ const (
 	ModeBlock  FirewallMode = "block"
 )
 
+// ReviewLevel selects whether this request uses the optional large-judge stage.
+// Exact values are "standard" and "deep". An omitted selection leaves the
+// selected tenant/surface AppConfig threat_judge.enabled in control; the SDK
+// never fills an implicit default.
+type ReviewLevel string
+
+const (
+	ReviewStandard ReviewLevel = "standard"
+	ReviewDeep     ReviewLevel = "deep"
+)
+
 type GovernanceAction string
 
 const (
@@ -75,6 +86,10 @@ type BlockResult struct {
 	DetectorScores map[HarmfulOutcome]float64 `json:"detector_scores,omitempty"`
 	DetectorCounts map[HarmfulOutcome]int     `json:"detector_counts,omitempty"`
 	Governance     *GovernanceDecision        `json:"governance,omitempty"`
+	// Review is the acknowledged explicit request setting after a successful
+	// call, not evidence that the large-judge stage ran. Empty when review was
+	// omitted on the request.
+	Review ReviewLevel `json:"review,omitempty"`
 }
 
 // ClassificationMetadata carries caller-provided request metadata alongside
@@ -100,6 +115,9 @@ type Options struct {
 	// may run on overlapping Classify/ClassifyBatch calls; callers must
 	// synchronize any shared state it touches.
 	OnClassify func(ClassifyEvent)
+	// Review is an optional client default of "standard" or "deep". Empty
+	// omits the wire field so the backend AppConfig remains authoritative.
+	Review ReviewLevel
 }
 
 type classifyConfig struct {
@@ -110,6 +128,7 @@ type classifyConfig struct {
 	shadowMode *bool
 	requestID  string
 	governance *GovernanceContext
+	review     *ReviewLevel
 }
 
 // ClassifyOption customizes a single Classify call.
@@ -154,6 +173,12 @@ func WithRequestID(id string) ClassifyOption {
 	return func(c *classifyConfig) { c.requestID = id }
 }
 
+// WithReview sets the review level for a single Classify call. An empty value
+// is an error; it does not omit the field or restore server AppConfig control.
+func WithReview(review ReviewLevel) ClassifyOption {
+	return func(c *classifyConfig) { c.review = &review }
+}
+
 type batchClassifyConfig struct {
 	hooks       []HookLabel
 	toolNames   []string
@@ -163,6 +188,7 @@ type batchClassifyConfig struct {
 	shadowMode  *bool
 	requestID   string
 	governance  []*GovernanceContext
+	review      *ReviewLevel
 }
 
 // BatchClassifyOption customizes a single ClassifyBatch call.
@@ -211,6 +237,13 @@ func WithBatchShadowMode(enabled bool) BatchClassifyOption {
 // WithBatchRequestID overrides the generated request id in metadata.silmaril.
 func WithBatchRequestID(id string) BatchClassifyOption {
 	return func(c *batchClassifyConfig) { c.requestID = id }
+}
+
+// WithBatchReview sets the review level for one ClassifyBatch call. An empty
+// value is an error; it does not omit the field or restore server AppConfig
+// control.
+func WithBatchReview(review ReviewLevel) BatchClassifyOption {
+	return func(c *batchClassifyConfig) { c.review = &review }
 }
 
 // ClassifyEvent describes a classification decision. It is emitted for both

@@ -83,3 +83,17 @@ func (e *BatchFirewallBlockedError) Error() string {
 //
 // Deprecated: use BatchFirewallBlockedError.
 type BatchPromptBlockedError = BatchFirewallBlockedError
+
+// ReviewCompatibilityError is returned when an explicit review selection is
+// not acknowledged with the same top-level string. It is not retryable.
+type ReviewCompatibilityError struct {
+	Requested    ReviewLevel
+	Acknowledged ReviewLevel
+}
+
+func (e *ReviewCompatibilityError) Error() string {
+	if e.Acknowledged == "" {
+		return fmt.Sprintf("firewall: review %q was not acknowledged", e.Requested)
+	}
+	return fmt.Sprintf("firewall: review acknowledgement %q does not match requested %q", e.Acknowledged, e.Requested)
+}
