@@ -45,6 +45,7 @@ jobs:
       contents: write
     outputs:
       should_release: ${{ steps.plan.outputs.should_release }}
+      create_tag: ${{ steps.plan.outputs.create_tag }}
       version: ${{ steps.plan.outputs.version }}
       tag: ${{ steps.plan.outputs.tag }}
     steps:
@@ -62,30 +63,7 @@ jobs:
 
       - name: Decide whether to release
         id: plan
-        run: |
-          set -euo pipefail
-
-          version="$(tr -d '[:space:]' < VERSION)"
-          tag="v${version}"
-
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([a-zA-Z0-9.-]+)?$ ]]; then
-            echo "::error::Invalid VERSION: $version"
-            exit 1
-          fi
-
-          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" >/dev/null 2>&1; then
-            should_release=false
-            echo "Tag $tag already exists; skipping release."
-          else
-            should_release=true
-            echo "Tag $tag does not exist; releasing."
-          fi
-
-          {
-            echo "should_release=${should_release}"
-            echo "version=${version}"
-            echo "tag=${tag}"
-          } >> "$GITHUB_OUTPUT"
+        run: bash scripts/plan-release.sh
 
       - name: Format check
         if: steps.plan.outputs.should_release == 'true'
@@ -131,7 +109,7 @@ jobs:
           echo "notes_file=${notes_file}" >> "$GITHUB_OUTPUT"
 
       - name: Push release tag
-        if: steps.plan.outputs.should_release == 'true'
+        if: steps.plan.outputs.create_tag == 'true'
         env:
           TAG: ${{ steps.plan.outputs.tag }}
         run: |
