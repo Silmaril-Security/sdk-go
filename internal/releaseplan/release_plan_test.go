@@ -14,15 +14,35 @@ import (
 const testVersion = "1.2.3"
 
 type gitFixture struct {
-	env    []string
-	origin string
-	work   string
-	sha    string
+	bashPath    string
+	env         []string
+	gitPath     string
+	origin      string
+	plannerPath string
+	work        string
+	sha         string
 }
 
 func TestReleasePlanner(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("release workflow integration tests require POSIX Bash and Git")
+	}
+
+	bashPath, err := exec.LookPath("bash")
+	if err != nil {
+		t.Skipf("release workflow integration tests require Bash: %v", err)
+	}
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skipf("release workflow integration tests require Git: %v", err)
+	}
+	plannerPath, err := filepath.Abs(filepath.Join("..", "..", "scripts", "plan-release.sh"))
+	if err != nil {
+		t.Fatalf("resolve release planner path: %v", err)
+	}
+
 	t.Run("new tag", func(t *testing.T) {
-		fixture := newGitFixture(t)
+		fixture := newGitFixture(t, bashPath, gitPath, plannerPath)
 
 		outputs := fixture.plan(t, fixture.sha)
 
@@ -31,7 +51,7 @@ func TestReleasePlanner(t *testing.T) {
 
 	for _, tagType := range []string{"lightweight", "annotated"} {
 		t.Run("matching "+tagType+" tag", func(t *testing.T) {
-			fixture := newGitFixture(t)
+			fixture := newGitFixture(t, bashPath, gitPath, plannerPath)
 			fixture.publishTag(t, tagType, fixture.sha)
 
 			outputs := fixture.plan(t, fixture.sha)
@@ -41,7 +61,7 @@ func TestReleasePlanner(t *testing.T) {
 	}
 
 	t.Run("tag on different commit", func(t *testing.T) {
-		fixture := newGitFixture(t)
+		fixture := newGitFixture(t, bashPath, gitPath, plannerPath)
 		fixture.publishTag(t, "lightweight", fixture.sha)
 		laterSHA := fixture.commit(t, "later main commit")
 
@@ -51,7 +71,7 @@ func TestReleasePlanner(t *testing.T) {
 	})
 
 	t.Run("remote lookup failure", func(t *testing.T) {
-		fixture := newGitFixture(t)
+		fixture := newGitFixture(t, bashPath, gitPath, plannerPath)
 		missingOrigin := filepath.Join(t.TempDir(), "missing.git")
 		fixture.git(t, "remote", "set-url", "origin", missingOrigin)
 		outputFile := filepath.Join(t.TempDir(), "github-output")
@@ -71,18 +91,21 @@ func TestReleasePlanner(t *testing.T) {
 	})
 }
 
-func newGitFixture(t *testing.T) *gitFixture {
+func newGitFixture(t *testing.T, bashPath, gitPath, plannerPath string) *gitFixture {
 	t.Helper()
 
 	root := t.TempDir()
 	fixture := &gitFixture{
-		env:    isolatedGitEnvironment(t.TempDir()),
-		origin: filepath.Join(root, "origin.git"),
-		work:   filepath.Join(root, "work"),
+		bashPath:    bashPath,
+		env:         isolatedGitEnvironment(t.TempDir()),
+		gitPath:     gitPath,
+		origin:      filepath.Join(root, "origin.git"),
+		plannerPath: plannerPath,
+		work:        filepath.Join(root, "work"),
 	}
 
-	fixture.command(t, root, "git", "init", "--bare", fixture.origin)
-	fixture.command(t, root, "git", "init", "--initial-branch=main", fixture.work)
+	fixture.command(t, root, fixture.gitPath, "init", "--bare", fixture.origin)
+	fixture.command(t, root, fixture.gitPath, "init", "--initial-branch=main", fixture.work)
 	fixture.git(t, "config", "user.name", "Release Plan Test")
 	fixture.git(t, "config", "user.email", "release-plan@example.invalid")
 	fixture.git(t, "config", "commit.gpgSign", "false")
@@ -144,12 +167,7 @@ func (f *gitFixture) plan(t *testing.T, sha string) map[string]string {
 }
 
 func (f *gitFixture) runPlanner(sha, outputFile string) (string, error) {
-	_, testFile, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", fmt.Errorf("locate release planner test")
-	}
-	script := filepath.Join(filepath.Dir(testFile), "..", "..", "scripts", "plan-release.sh")
-	cmd := exec.Command("/bin/bash", script)
+	cmd := exec.Command(f.bashPath, f.plannerPath)
 	cmd.Dir = f.work
 	cmd.Env = append(append([]string{}, f.env...),
 		"GITHUB_SHA="+sha,
@@ -161,7 +179,7 @@ func (f *gitFixture) runPlanner(sha, outputFile string) (string, error) {
 
 func (f *gitFixture) git(t *testing.T, args ...string) string {
 	t.Helper()
-	return f.command(t, f.work, "git", args...)
+	return f.command(t, f.work, f.gitPath, args...)
 }
 
 func (f *gitFixture) command(t *testing.T, dir, name string, args ...string) string {
