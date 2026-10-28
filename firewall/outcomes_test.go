@@ -3,6 +3,11 @@
 package firewall
 
 import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -155,5 +160,123 @@ func TestBlockResultFromResponseDecodesFutureOutcomeLabels(t *testing.T) {
 	}
 	if result.DetectorCounts[HarmfulOutcome("new_detector")] != 1 {
 		t.Fatalf("DetectorCounts = %+v", result.DetectorCounts)
+	}
+}
+
+func TestNormalizeHarmfulOutcomeIntMapPreservesValidCounts(t *testing.T) {
+	normalized, err := normalizeHarmfulOutcomeIntMap(nil, "detector_counts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized != nil {
+		t.Fatalf("nil map normalized to %#v, want nil", normalized)
+	}
+
+	normalized, err = normalizeHarmfulOutcomeIntMap(map[string]int{}, "detector_counts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized == nil || len(normalized) != 0 {
+		t.Fatalf("empty map normalized to %#v, want non-nil empty map", normalized)
+	}
+
+	normalized, err = normalizeHarmfulOutcomeIntMap(map[string]int{
+		string(HarmfulOutcomeSecretExposure): 0,
+		"future_detector":                    2,
+	}, "detector_counts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[HarmfulOutcome]int{
+		HarmfulOutcomeSecretExposure: 0,
+		"future_detector":            2,
+	}
+	if !reflect.DeepEqual(normalized, want) {
+		t.Fatalf("normalized counts = %#v, want %#v", normalized, want)
+	}
+}
+
+func TestClassifyRejectsNegativeDetectorCountsBeforeResultsOrCallbacks(t *testing.T) {
+	cases := []struct {
+		name      string
+		body      string
+		batch     bool
+		wantKey   string
+		wantValue int
+	}{
+		{
+			name:      "single known outcome",
+			body:      `{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block","detector_counts":{"secret_exposure":-1}}`,
+			wantKey:   "secret_exposure",
+			wantValue: -1,
+		},
+		{
+			name:      "batch future outcome",
+			body:      `{"predictions":[{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block","detector_counts":{"control_abuse":0}},{"prediction":"BENIGN","score":0.2,"threshold":0.5,"mode":"block","detector_counts":{"future_detector":-2}}]}`,
+			batch:     true,
+			wantKey:   "future_detector",
+			wantValue: -2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := 0
+			callbacks := 0
+			client := &http.Client{
+				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					requests++
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(tc.body)),
+						Request:    req,
+					}, nil
+				}),
+			}
+			fw, err := New(Options{
+				APIKey:     "sk",
+				APIURL:     "https://example.com",
+				HTTPClient: client,
+				OnClassify: func(ClassifyEvent) {
+					callbacks++
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var callErr error
+			if tc.batch {
+				var results []BlockResult
+				results, callErr = fw.ClassifyBatch(context.Background(), []string{"valid", "invalid"})
+				if results != nil {
+					t.Fatalf("results = %#v, want nil", results)
+				}
+			} else {
+				var result BlockResult
+				result, callErr = fw.Classify(context.Background(), "invalid")
+				if !reflect.DeepEqual(result, BlockResult{}) {
+					t.Fatalf("result = %#v, want zero value", result)
+				}
+			}
+			if callErr == nil {
+				t.Fatal("expected negative detector count error")
+			}
+			wantError := fmt.Sprintf(
+				"firewall: detector_counts value for %q must be non-negative, got %d",
+				tc.wantKey,
+				tc.wantValue,
+			)
+			if !strings.Contains(callErr.Error(), wantError) {
+				t.Fatalf("error = %q, want substring %q", callErr, wantError)
+			}
+			if requests != 1 {
+				t.Errorf("HTTP requests = %d, want 1", requests)
+			}
+			if callbacks != 0 {
+				t.Errorf("OnClassify calls = %d, want 0", callbacks)
+			}
+		})
 	}
 }
