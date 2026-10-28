@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.7.6
+
+- Reject negative `detector_counts` values before returning classification
+  results or invoking callbacks. Nil and empty maps, nonnegative values, and
+  future detector labels remain accepted.
+
 ## v0.7.5
 
 - Add optional `review` on `Classify` and `ClassifyBatch`: `ReviewStandard`
