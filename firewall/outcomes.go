@@ -182,6 +182,9 @@ func normalizeHarmfulOutcomeIntMap(values map[string]int, fieldName string) (map
 		if err != nil {
 			return nil, err
 		}
+		if value < 0 {
+			return nil, fmt.Errorf("firewall: %s value for %q must be non-negative, got %d", fieldName, key, value)
+		}
 		out[outcome] = value
 	}
 	return out, nil
