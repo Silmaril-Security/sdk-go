@@ -4,6 +4,7 @@ package firewall
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -160,6 +161,272 @@ func TestBlockResultFromResponseDecodesFutureOutcomeLabels(t *testing.T) {
 	}
 	if result.DetectorCounts[HarmfulOutcome("new_detector")] != 1 {
 		t.Fatalf("DetectorCounts = %+v", result.DetectorCounts)
+	}
+}
+
+func TestSingleResponseOutcomeMapsRejectInvalidElements(t *testing.T) {
+	cases := []struct {
+		name      string
+		field     string
+		value     string
+		wantError string
+	}{
+		{
+			name:      "null outcome score",
+			field:     "outcome_scores",
+			value:     "null",
+			wantError: `firewall: outcome_scores value for "future_outcome" must not be null`,
+		},
+		{
+			name:      "null detector score",
+			field:     "detector_scores",
+			value:     "null",
+			wantError: `firewall: detector_scores value for "future_outcome" must not be null`,
+		},
+		{
+			name:      "null detector count",
+			field:     "detector_counts",
+			value:     "null",
+			wantError: `firewall: detector_counts value for "future_outcome" must not be null`,
+		},
+		{
+			name:      "nonnumeric outcome score",
+			field:     "outcome_scores",
+			value:     `"invalid"`,
+			wantError: `firewall: invalid outcome_scores value for "future_outcome"`,
+		},
+		{
+			name:      "nonnumeric detector score",
+			field:     "detector_scores",
+			value:     `"invalid"`,
+			wantError: `firewall: invalid detector_scores value for "future_outcome"`,
+		},
+		{
+			name:      "nonnumeric detector count",
+			field:     "detector_counts",
+			value:     `"invalid"`,
+			wantError: `firewall: invalid detector_counts value for "future_outcome"`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var resp singleResponse
+			body := fmt.Sprintf(`{"prediction":"BENIGN",%q:{"future_outcome":%s}}`, tc.field, tc.value)
+			err := json.Unmarshal([]byte(body), &resp)
+			if err == nil {
+				t.Fatal("expected decode error")
+			}
+			if !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatalf("error = %q, want substring %q", err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestClassifyRejectsNullOutcomeMapValuesBeforeResultsOrCallbacks(t *testing.T) {
+	cases := []struct {
+		name  string
+		field string
+		batch bool
+		key   string
+	}{
+		{name: "single outcome scores", field: "outcome_scores", key: "secret_exposure"},
+		{name: "single detector scores", field: "detector_scores", key: "secret_exposure"},
+		{name: "single detector counts", field: "detector_counts", key: "secret_exposure"},
+		{name: "batch outcome scores with future label", field: "outcome_scores", batch: true, key: "future_outcome"},
+		{name: "batch detector scores with future label", field: "detector_scores", batch: true, key: "future_outcome"},
+		{name: "batch detector counts with future label", field: "detector_counts", batch: true, key: "future_outcome"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			item := fmt.Sprintf(
+				`{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block",%q:{%q:null}}`,
+				tc.field,
+				tc.key,
+			)
+			body := item
+			if tc.batch {
+				validItem := fmt.Sprintf(
+					`{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block",%q:{"secret_exposure":0}}`,
+					tc.field,
+				)
+				body = fmt.Sprintf(`{"predictions":[%s,%s]}`, validItem, item)
+			}
+
+			callbacks := 0
+			client := &http.Client{
+				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Header:     make(http.Header),
+						Body:       io.NopCloser(strings.NewReader(body)),
+						Request:    req,
+					}, nil
+				}),
+			}
+			fw, err := New(Options{
+				APIKey:     "sk",
+				APIURL:     "https://example.com",
+				HTTPClient: client,
+				OnClassify: func(ClassifyEvent) {
+					callbacks++
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var callErr error
+			if tc.batch {
+				var results []BlockResult
+				results, callErr = fw.ClassifyBatch(context.Background(), []string{"valid", "invalid"})
+				if results != nil {
+					t.Fatalf("results = %#v, want nil", results)
+				}
+			} else {
+				var result BlockResult
+				result, callErr = fw.Classify(context.Background(), "invalid")
+				if !reflect.DeepEqual(result, BlockResult{}) {
+					t.Fatalf("result = %#v, want zero value", result)
+				}
+			}
+			if callErr == nil {
+				t.Fatal("expected null map value error")
+			}
+			wantError := fmt.Sprintf(`firewall: %s value for %q must not be null`, tc.field, tc.key)
+			if !strings.Contains(callErr.Error(), wantError) {
+				t.Fatalf("error = %q, want substring %q", callErr, wantError)
+			}
+			if callbacks != 0 {
+				t.Errorf("OnClassify calls = %d, want 0", callbacks)
+			}
+		})
+	}
+}
+
+func TestClassifyAcceptsCompatibleOutcomeMaps(t *testing.T) {
+	cases := []struct {
+		name   string
+		fields string
+		check  func(*testing.T, BlockResult)
+	}{
+		{
+			name: "omitted",
+			check: func(t *testing.T, result BlockResult) {
+				if result.OutcomeScores != nil || result.DetectorScores != nil || result.DetectorCounts != nil {
+					t.Fatalf("maps = %#v, %#v, %#v; want nil", result.OutcomeScores, result.DetectorScores, result.DetectorCounts)
+				}
+			},
+		},
+		{
+			name:   "null whole maps",
+			fields: `,"outcome_scores":null,"detector_scores":null,"detector_counts":null`,
+			check: func(t *testing.T, result BlockResult) {
+				if result.OutcomeScores != nil || result.DetectorScores != nil || result.DetectorCounts != nil {
+					t.Fatalf("maps = %#v, %#v, %#v; want nil", result.OutcomeScores, result.DetectorScores, result.DetectorCounts)
+				}
+			},
+		},
+		{
+			name:   "empty maps",
+			fields: `,"outcome_scores":{},"detector_scores":{},"detector_counts":{}`,
+			check: func(t *testing.T, result BlockResult) {
+				if result.OutcomeScores == nil || result.DetectorScores == nil || result.DetectorCounts == nil {
+					t.Fatalf("maps = %#v, %#v, %#v; want non-nil empty maps", result.OutcomeScores, result.DetectorScores, result.DetectorCounts)
+				}
+				if len(result.OutcomeScores) != 0 || len(result.DetectorScores) != 0 || len(result.DetectorCounts) != 0 {
+					t.Fatalf("maps = %#v, %#v, %#v; want empty", result.OutcomeScores, result.DetectorScores, result.DetectorCounts)
+				}
+			},
+		},
+		{
+			name:   "zero fractional and future values",
+			fields: `,"outcome_scores":{"secret_exposure":0,"future_outcome":0.25},"detector_scores":{"control_abuse":0.5,"future_detector":0},"detector_counts":{"secret_exposure":0,"future_detector":2}`,
+			check: func(t *testing.T, result BlockResult) {
+				wantOutcomeScores := map[HarmfulOutcome]float64{
+					HarmfulOutcomeSecretExposure: 0,
+					"future_outcome":             0.25,
+				}
+				wantDetectorScores := map[HarmfulOutcome]float64{
+					HarmfulOutcomeControlAbuse: 0.5,
+					"future_detector":          0,
+				}
+				wantDetectorCounts := map[HarmfulOutcome]int{
+					HarmfulOutcomeSecretExposure: 0,
+					"future_detector":            2,
+				}
+				if !reflect.DeepEqual(result.OutcomeScores, wantOutcomeScores) {
+					t.Errorf("OutcomeScores = %#v, want %#v", result.OutcomeScores, wantOutcomeScores)
+				}
+				if !reflect.DeepEqual(result.DetectorScores, wantDetectorScores) {
+					t.Errorf("DetectorScores = %#v, want %#v", result.DetectorScores, wantDetectorScores)
+				}
+				if !reflect.DeepEqual(result.DetectorCounts, wantDetectorCounts) {
+					t.Errorf("DetectorCounts = %#v, want %#v", result.DetectorCounts, wantDetectorCounts)
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		for _, batch := range []bool{false, true} {
+			name := "single"
+			if batch {
+				name = "batch"
+			}
+			t.Run(tc.name+"/"+name, func(t *testing.T) {
+				item := `{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block"` + tc.fields + `}`
+				body := item
+				if batch {
+					body = `{"predictions":[` + item + `]}`
+				}
+				callbacks := 0
+				client := &http.Client{
+					Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+						return &http.Response{
+							StatusCode: http.StatusOK,
+							Header:     make(http.Header),
+							Body:       io.NopCloser(strings.NewReader(body)),
+							Request:    req,
+						}, nil
+					}),
+				}
+				fw, err := New(Options{
+					APIKey:     "sk",
+					APIURL:     "https://example.com",
+					HTTPClient: client,
+					OnClassify: func(ClassifyEvent) {
+						callbacks++
+					},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				var result BlockResult
+				if batch {
+					results, err := fw.ClassifyBatch(context.Background(), []string{"valid"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if len(results) != 1 {
+						t.Fatalf("results length = %d, want 1", len(results))
+					}
+					result = results[0]
+				} else {
+					result, err = fw.Classify(context.Background(), "valid")
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				tc.check(t, result)
+				if callbacks != 1 {
+					t.Errorf("OnClassify calls = %d, want 1", callbacks)
+				}
+			})
+		}
 	}
 }
 
