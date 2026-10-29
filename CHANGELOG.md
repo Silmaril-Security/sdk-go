@@ -1,5 +1,12 @@
 # Changelog
 
+## v0.7.7
+
+- Reject null elements in `outcome_scores`, `detector_scores`, and
+  `detector_counts` before returning results or invoking callbacks for single
+  and batch classifications. Optional whole maps may still be null or omitted;
+  valid zero values and future labels remain accepted.
+
 ## v0.7.6
 
 - Reject negative `detector_counts` values before returning classification
