@@ -35,9 +35,9 @@ type singleResponse struct {
 	Threshold      float64             `json:"threshold"`
 	Mode           FirewallMode        `json:"mode"`
 	PrimaryOutcome *string             `json:"primary_outcome"`
-	OutcomeScores  map[string]float64  `json:"outcome_scores"`
-	DetectorScores map[string]float64  `json:"detector_scores"`
-	DetectorCounts map[string]int      `json:"detector_counts"`
+	OutcomeScores  outcomeScoreMap     `json:"outcome_scores"`
+	DetectorScores detectorScoreMap    `json:"detector_scores"`
+	DetectorCounts detectorCountMap    `json:"detector_counts"`
 	Governance     *GovernanceDecision `json:"governance"`
 	// Review stays loosely typed. Explicit selections require an exact string
 	// acknowledgement; any other JSON value is a compatibility error. Omitted
@@ -483,15 +483,15 @@ func blockResultFromResponse(resp singleResponse, requestedMode ...FirewallMode)
 		}
 		primary = normalized
 	}
-	outcomeScores, err := normalizeHarmfulOutcomeFloatMap(resp.OutcomeScores, "outcome_scores")
+	outcomeScores, err := normalizeHarmfulOutcomeFloatMap(map[string]float64(resp.OutcomeScores), "outcome_scores")
 	if err != nil {
 		return BlockResult{}, err
 	}
-	detectorScores, err := normalizeHarmfulOutcomeFloatMap(resp.DetectorScores, "detector_scores")
+	detectorScores, err := normalizeHarmfulOutcomeFloatMap(map[string]float64(resp.DetectorScores), "detector_scores")
 	if err != nil {
 		return BlockResult{}, err
 	}
-	detectorCounts, err := normalizeHarmfulOutcomeIntMap(resp.DetectorCounts, "detector_counts")
+	detectorCounts, err := normalizeHarmfulOutcomeIntMap(map[string]int(resp.DetectorCounts), "detector_counts")
 	if err != nil {
 		return BlockResult{}, err
 	}
