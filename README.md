@@ -608,6 +608,6 @@ IDs must be non-empty; MCP tools also require their canonical server parent ID.
 The compatibility metadata copy remains attribution only. Caller agent metadata
 does not supply an authenticated principal.
 
-This source prepares version 0.7.7. Its registry install command becomes
-available after the authorized main-branch release workflow publishes the package.
-Confirm registry publication before installing this version.
+Version v0.7.7 is available as a Go module; see the
+[package documentation](https://pkg.go.dev/github.com/Silmaril-Security/sdk-go@v0.7.7/firewall)
+and [GitHub release](https://github.com/Silmaril-Security/sdk-go/releases/tag/v0.7.7).
