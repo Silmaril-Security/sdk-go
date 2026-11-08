@@ -10,6 +10,12 @@ compatible with the license in [LICENSE](LICENSE).
 - GitHub CLI if you are publishing branches or pull requests.
 - No private Silmaril API key is required for unit tests.
 
+CI retains a lane for the declared Go 1.22 compatibility floor and tests the
+two current stable Go release lines. Maintainers rotate the current-stable
+lanes when a new stable Go release line becomes available, without changing
+the floor lane. Intermediate Go releases remain compatible; omission from this
+focused matrix does not drop language or API support.
+
 ## Development
 
 Run the standard validation locally before opening a PR:

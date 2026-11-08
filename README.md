@@ -52,7 +52,11 @@ Use `@main` only when you intentionally want the current branch tip. Go resolves
 that once to a pinned pseudo-version in `go.mod`; it does not keep floating
 forward on future builds.
 
-Requires Go 1.22 or later.
+Requires Go 1.22 or later. CI tests the declared Go 1.22 compatibility floor
+and the two current stable Go release lines. When a new stable Go release line
+becomes available, maintainers rotate the current-stable lanes while retaining
+the floor lane. This lane selection does not drop language or API compatibility
+for Go releases between the tested floor and current-stable lines.
 
 The module path is `github.com/Silmaril-Security/sdk-go`. The SDK import path
 is `github.com/Silmaril-Security/sdk-go/firewall`, so call sites use
