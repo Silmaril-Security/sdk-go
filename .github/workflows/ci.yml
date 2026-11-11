@@ -1,10 +1,12 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
+
+concurrency:
+  group: pr-validation-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -44,3 +46,11 @@ jobs:
 
       - name: Test
         run: go test -race ./...
+
+      - name: Compile the independent customer app without credentials
+        run: |
+          consumer_dir=$(mktemp -d)
+          cp customer/consumer.go "$consumer_dir/main.go"
+          go -C "$consumer_dir" mod init customer-consumer
+          go -C "$consumer_dir" mod edit -require=github.com/Silmaril-Security/sdk-go@v0.0.0 -replace=github.com/Silmaril-Security/sdk-go="$GITHUB_WORKSPACE"
+          go -C "$consumer_dir" build -mod=mod -o "$consumer_dir/customer" .
