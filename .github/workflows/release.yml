@@ -117,9 +117,9 @@ jobs:
             mkdir -p results
             echo '{"status":"BLOCKED","errors":["Configure the customer testing GitHub App and Test Tenant A credentials"]}' > results/result.json
             echo '## Customer qualification: BLOCKED — shared runner access is not configured' >> "$GITHUB_STEP_SUMMARY"
+            exit 1
           fi
       - name: Create scoped repository read token
-        continue-on-error: true
         if: steps.configured.outputs.ready == 'true'
         id: reader
         uses: actions/create-github-app-token@v3
@@ -130,7 +130,6 @@ jobs:
           repositories: SilmarilCustomerTests,firewall-ui,silmaril-firewall-mcp
           permission-contents: read
       - name: Checkout pinned shared runner
-        continue-on-error: true
         if: steps.configured.outputs.ready == 'true'
         uses: actions/checkout@v4
         with:
@@ -143,11 +142,9 @@ jobs:
         with:
           python-version: '3.12'
       - name: Prepare exact Go module candidate
-        continue-on-error: true
         if: steps.configured.outputs.ready == 'true'
         run: python _customer/scripts/package_go.py --output dist/go-proxy.zip
       - name: Resolve package artifact
-        continue-on-error: true
         if: steps.configured.outputs.ready == 'true'
         id: package
         run: |
@@ -157,7 +154,6 @@ jobs:
       - name: Customer journey
         if: steps.configured.outputs.ready == 'true'
         id: acceptance
-        continue-on-error: true
         uses: ./_customer
         with:
           sdk: go
@@ -187,7 +183,7 @@ jobs:
           path: results/
           if-no-files-found: warn
       - name: Enforce qualified rollout
-        if: vars.CUSTOMER_ACCEPTANCE_REQUIRED == 'true' && (steps.selection.outputs.should_test == 'true' || steps.plan.outputs.should_release == 'true')
+        if: steps.selection.outputs.should_test == 'true' || steps.plan.outputs.should_release == 'true'
         env:
           OUTCOME: ${{ steps.acceptance.outcome }}
         run: test "$OUTCOME" = success
