@@ -201,7 +201,12 @@ sent in the order they were started, so parallel checks keep the backend
 sequence intact. `MaxConcurrent` bounds how many are in flight at once. A
 background classification retries once, does not use the caller's
 cancellation, and is dropped when its conversation already holds `MaxQueued`
-unjoined classifications. The SDK does not log: a dropped or failed background
+unjoined classifications or the client holds `MaxConcurrent` times `MaxQueued`
+of them across all conversations, including calls with no conversation. In
+Block mode the input check and the output check both wait their turn in that
+order, and a canceled context stops `Protect` waiting for its turn. `Protect`
+copies request metadata and the governance resource before it returns, so the
+caller can reuse them. The SDK does not log: a dropped or failed background
 classification is silent, and a completed one reaches `OnClassify`. Call
 `fw.Flush(ctx)` to wait for background classifications, for example before a
 serverless handler returns.

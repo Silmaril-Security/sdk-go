@@ -25,42 +25,59 @@ func (f *Firewall) retryBudget(ctx context.Context) int {
 
 // verdict is one classification started beside the caller's flow.
 type verdict struct {
-	done   chan struct{}
-	result BlockResult
-	err    error
+	// done closes once result and err are set.
+	done chan struct{}
+	// released closes once the verdict has left its conversation's queue. A
+	// canceled verdict is done before it is released, so its successor still
+	// waits for every earlier classification.
+	released chan struct{}
+	result   BlockResult
+	err      error
 }
 
 // pendingVerdicts runs classifications beside the caller. Those that share a
 // conversation are sent in the order they were started, and at most
 // maxConcurrent are in flight at once.
 type pendingVerdicts struct {
-	slots     chan struct{}
-	maxQueued int
+	slots         chan struct{}
+	maxQueued     int
+	maxBackground int
 
 	mu          sync.Mutex
 	tails       map[string]*verdict
 	depths      map[string]int
+	background  int
 	outstanding int
 	idle        []chan struct{}
 }
 
 func newPendingVerdicts(maxConcurrent, maxQueued int) *pendingVerdicts {
 	return &pendingVerdicts{
-		slots:     make(chan struct{}, maxConcurrent),
-		maxQueued: maxQueued,
-		tails:     make(map[string]*verdict),
-		depths:    make(map[string]int),
+		slots:         make(chan struct{}, maxConcurrent),
+		maxQueued:     maxQueued,
+		maxBackground: maxConcurrent * maxQueued,
+		tails:         make(map[string]*verdict),
+		depths:        make(map[string]int),
 	}
 }
 
 // submit starts a classification. A background one is never joined by its
-// caller, so it is dropped once its conversation already holds maxQueued.
-func (p *pendingVerdicts) submit(conversation string, background bool, call func() (BlockResult, error)) *verdict {
-	started := &verdict{done: make(chan struct{})}
+// caller, so it is dropped once its conversation holds maxQueued or the
+// client holds maxBackground of them. A joined one stops waiting for its turn
+// when ctx is done.
+func (p *pendingVerdicts) submit(
+	ctx context.Context,
+	conversation string,
+	background bool,
+	call func(context.Context) (BlockResult, error),
+) *verdict {
+	started := &verdict{done: make(chan struct{}), released: make(chan struct{})}
 	p.mu.Lock()
-	if background && conversation != "" && p.depths[conversation] >= p.maxQueued {
+	if background && (p.background >= p.maxBackground ||
+		(conversation != "" && p.depths[conversation] >= p.maxQueued)) {
 		p.mu.Unlock()
 		close(started.done)
+		close(started.released)
 		return started
 	}
 	var previous *verdict
@@ -69,25 +86,56 @@ func (p *pendingVerdicts) submit(conversation string, background bool, call func
 		p.tails[conversation] = started
 		p.depths[conversation]++
 	}
+	if background {
+		p.background++
+	}
 	p.outstanding++
 	p.mu.Unlock()
 
-	go func() {
-		if previous != nil {
-			<-previous.done
-		}
-		p.slots <- struct{}{}
-		started.result, started.err = call()
-		<-p.slots
-		p.finish(conversation, started)
-		close(started.done)
-	}()
+	go p.run(ctx, conversation, background, previous, started, call)
 	return started
 }
 
-func (p *pendingVerdicts) finish(conversation string, finished *verdict) {
+func (p *pendingVerdicts) run(
+	ctx context.Context,
+	conversation string,
+	background bool,
+	previous *verdict,
+	started *verdict,
+	call func(context.Context) (BlockResult, error),
+) {
+	defer func() {
+		p.finish(conversation, background, started)
+		close(started.released)
+	}()
+	if previous != nil {
+		select {
+		case <-previous.released:
+		case <-ctx.Done():
+			started.err = context.Cause(ctx)
+			close(started.done)
+			<-previous.released
+			return
+		}
+	}
+	select {
+	case p.slots <- struct{}{}:
+	case <-ctx.Done():
+		started.err = context.Cause(ctx)
+		close(started.done)
+		return
+	}
+	started.result, started.err = call(ctx)
+	<-p.slots
+	close(started.done)
+}
+
+func (p *pendingVerdicts) finish(conversation string, background bool, finished *verdict) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if background {
+		p.background--
+	}
 	if conversation != "" {
 		if p.depths[conversation]--; p.depths[conversation] == 0 {
 			delete(p.depths, conversation)

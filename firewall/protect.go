@@ -2,7 +2,12 @@
 
 package firewall
 
-import "context"
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+)
 
 // Protect runs operation while text is classified, instead of waiting for
 // the verdict first. It accepts the same options as Classify.
@@ -11,7 +16,8 @@ import "context"
 // is withheld until the verdict arrives. A blocking decision returns
 // FirewallBlockedError and cancels the context passed to operation, so an
 // operation that honors its context stops early. Protect waits for operation
-// to return before it reports the block. In Shadow and Warn the result is
+// to return before it reports the block. When ctx is done, Protect stops
+// waiting for its turn in the queue and returns the context's error. In Shadow and Warn the result is
 // returned as soon as operation finishes and the classification completes in
 // the background; call Flush to wait for it.
 //
@@ -39,7 +45,10 @@ func ProtectWithOutput[T any](
 	opts ...ClassifyOption,
 ) (T, error) {
 	var zero T
-	input := newClassifyConfig(opts)
+	input, err := snapshotClassifyConfig(newClassifyConfig(opts))
+	if err != nil {
+		return zero, err
+	}
 	mode, err := f.effectiveMode(input.mode, input.shadowMode)
 	if err != nil {
 		return zero, err
@@ -55,8 +64,8 @@ func ProtectWithOutput[T any](
 
 	if mode == ModeShadow || mode == ModeWarn {
 		background := withBackgroundRetries(context.WithoutCancel(ctx))
-		f.pending.submit(conversation, true, func() (BlockResult, error) {
-			return f.classifyConfigured(background, text, input)
+		f.pending.submit(background, conversation, true, func(ctx context.Context) (BlockResult, error) {
+			return f.classifyConfigured(ctx, text, input)
 		})
 		result, err := operation(ctx)
 		if err != nil {
@@ -64,8 +73,8 @@ func ProtectWithOutput[T any](
 		}
 		if output != nil {
 			generatedText := output(result)
-			f.pending.submit(conversation, true, func() (BlockResult, error) {
-				return f.classifyConfigured(background, generatedText, generated)
+			f.pending.submit(background, conversation, true, func(ctx context.Context) (BlockResult, error) {
+				return f.classifyConfigured(ctx, generatedText, generated)
 			})
 		}
 		return result, nil
@@ -73,7 +82,7 @@ func ProtectWithOutput[T any](
 
 	operationCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
-	pending := f.pending.submit(conversation, false, func() (BlockResult, error) {
+	pending := f.pending.submit(ctx, conversation, false, func(ctx context.Context) (BlockResult, error) {
 		return f.classifyConfigured(ctx, text, input)
 	})
 	go func() {
@@ -91,11 +100,44 @@ func ProtectWithOutput[T any](
 		return zero, operationErr
 	}
 	if output != nil {
-		if _, err := f.classifyConfigured(ctx, output(result), generated); err != nil {
-			return zero, err
+		generatedText := output(result)
+		checked := f.pending.submit(ctx, conversation, false, func(ctx context.Context) (BlockResult, error) {
+			return f.classifyConfigured(ctx, generatedText, generated)
+		})
+		<-checked.done
+		if checked.err != nil {
+			return zero, checked.err
 		}
 	}
 	return result, nil
+}
+
+// snapshotClassifyConfig detaches a request from caller-owned metadata and
+// governance values, so a classification that outlives Protect never reads
+// data its caller may reuse.
+func snapshotClassifyConfig(cfg classifyConfig) (classifyConfig, error) {
+	if cfg.metadata != nil {
+		encoded, err := json.Marshal(*cfg.metadata)
+		if err != nil {
+			return classifyConfig{}, fmt.Errorf("firewall: marshal metadata: %w", err)
+		}
+		decoder := json.NewDecoder(bytes.NewReader(encoded))
+		decoder.UseNumber()
+		var metadata ClassificationMetadata
+		if err := decoder.Decode(&metadata); err != nil {
+			return classifyConfig{}, fmt.Errorf("firewall: copy metadata: %w", err)
+		}
+		cfg.metadata = &metadata
+	}
+	if cfg.governance != nil {
+		governance := *cfg.governance
+		if governance.Resource != nil {
+			resource := *governance.Resource
+			governance.Resource = &resource
+		}
+		cfg.governance = &governance
+	}
+	return cfg, nil
 }
 
 // Flush waits for classifications that Protect left running in the

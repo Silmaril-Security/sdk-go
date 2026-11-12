@@ -123,6 +123,8 @@ type Options struct {
 	MaxConcurrent int
 	// MaxQueued bounds unjoined background classifications kept for one
 	// conversation; further ones are dropped. Zero selects the default of 64.
+	// Across all conversations, including calls with no conversation, the
+	// client keeps at most MaxConcurrent times MaxQueued of them.
 	MaxQueued int
 }
 

@@ -10,7 +10,12 @@
   `metadata.conversationId` in the order they were started. Background
   classifications retry once.
 - Add `Options.MaxConcurrent` (default 32) and `Options.MaxQueued` (default
-  64), and `Firewall.Flush` to wait for background classifications.
+  64), and `Firewall.Flush` to wait for background classifications. The client
+  keeps at most `MaxConcurrent` times `MaxQueued` background classifications
+  across all conversations.
+- `Protect` copies request metadata and the governance resource when it
+  starts, sends its Block-mode output check through the same ordered queue,
+  and stops waiting for its turn when its context is done.
 
 ## v0.7.7
 

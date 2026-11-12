@@ -30,6 +30,7 @@ type heldServer struct {
 	mu          sync.Mutex
 	texts       []string
 	hooks       []HookLabel
+	payloads    []singleRequestPayload
 	inFlight    int
 	maxInFlight int
 }
@@ -51,6 +52,7 @@ func newHeldServer(t *testing.T) *heldServer {
 		held.mu.Lock()
 		held.texts = append(held.texts, payload.Text)
 		held.hooks = append(held.hooks, payload.Hook)
+		held.payloads = append(held.payloads, payload)
 		held.inFlight++
 		if held.inFlight > held.maxInFlight {
 			held.maxInFlight = held.inFlight
@@ -344,6 +346,186 @@ func TestBackgroundClassificationsRetryOnce(t *testing.T) {
 	}
 	if budget := fw.retryBudget(context.Background()); budget != defaultMaxRetries {
 		t.Errorf("joined retry budget = %d, want %d", budget, defaultMaxRetries)
+	}
+}
+
+func TestProtectCanceledCallerStopsWaitingForItsTurn(t *testing.T) {
+	held := newHeldServer(t)
+	fw := newProtectFirewall(t, held, Options{MaxConcurrent: 2})
+	conversation := WithMetadata(ClassificationMetadata{"conversationId": "conversation-1"})
+
+	if _, err := Protect(context.Background(), fw, "first", answer, conversation, WithMode(ModeShadow)); err != nil {
+		t.Fatal(err)
+	}
+	held.awaitStarted(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	returned := make(chan error, 1)
+	go func() {
+		_, err := Protect(ctx, fw, "canceled", func(ctx context.Context) (string, error) {
+			cancel()
+			<-ctx.Done()
+			return "", ctx.Err()
+		}, conversation)
+		returned <- err
+	}()
+	select {
+	case err := <-returned:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(protectWait):
+		t.Fatal("canceled Protect kept waiting for its predecessor")
+	}
+
+	if _, err := Protect(context.Background(), fw, "third", answer, conversation, WithMode(ModeShadow)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Protect(context.Background(), fw, "witness", answer, WithMode(ModeShadow)); err != nil {
+		t.Fatal(err)
+	}
+	if witness := held.awaitStarted(t); witness != "witness" {
+		t.Fatalf("%q was sent before its predecessor finished", witness)
+	}
+
+	held.releaseAll()
+	flush(t, fw)
+	if texts, _ := held.seen(); !reflect.DeepEqual(texts, []string{"first", "witness", "third"}) {
+		t.Errorf("texts = %v", texts)
+	}
+}
+
+func TestProtectCanceledCallerStopsWaitingForASlot(t *testing.T) {
+	held := newHeldServer(t)
+	fw := newProtectFirewall(t, held, Options{MaxConcurrent: 1})
+
+	if _, err := Protect(context.Background(), fw, "first", answer, WithMode(ModeShadow)); err != nil {
+		t.Fatal(err)
+	}
+	held.awaitStarted(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	returned := make(chan error, 1)
+	go func() {
+		_, err := Protect(ctx, fw, "canceled", func(ctx context.Context) (string, error) {
+			cancel()
+			return "", ctx.Err()
+		})
+		returned <- err
+	}()
+	select {
+	case err := <-returned:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+	case <-time.After(protectWait):
+		t.Fatal("canceled Protect kept waiting for a slot")
+	}
+
+	held.releaseAll()
+	flush(t, fw)
+	if texts, _ := held.seen(); !reflect.DeepEqual(texts, []string{"first"}) {
+		t.Errorf("texts = %v", texts)
+	}
+}
+
+func TestProtectOutputCheckWaitsItsTurnInBlockMode(t *testing.T) {
+	held := newHeldServer(t)
+	fw := newProtectFirewall(t, held, Options{MaxConcurrent: 1})
+	conversation := WithMetadata(ClassificationMetadata{"conversationId": "conversation-1"})
+
+	returned := make(chan error, 1)
+	go func() {
+		_, err := ProtectWithOutput(context.Background(), fw, "prompt", answer,
+			func(reply string) string { return reply }, conversation, WithHook(HookUserInput))
+		returned <- err
+	}()
+	if first := held.awaitStarted(t); first != "prompt" {
+		t.Fatalf("first classification = %q", first)
+	}
+	if _, err := Protect(context.Background(), fw, "follow-up", answer, conversation, WithMode(ModeShadow)); err != nil {
+		t.Fatal(err)
+	}
+
+	held.releaseAll()
+	select {
+	case err := <-returned:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(protectWait):
+		t.Fatal("ProtectWithOutput never returned")
+	}
+	flush(t, fw)
+
+	texts, hooks := held.seen()
+	if !reflect.DeepEqual(texts, []string{"prompt", "follow-up", "answer"}) {
+		t.Errorf("texts = %v", texts)
+	}
+	if hooks[2] != HookLLMOutput {
+		t.Errorf("hooks = %v", hooks)
+	}
+	held.mu.Lock()
+	defer held.mu.Unlock()
+	if held.maxInFlight != 1 {
+		t.Errorf("max in flight = %d, want 1", held.maxInFlight)
+	}
+}
+
+func TestProtectSnapshotsRequestDataBeforeReturning(t *testing.T) {
+	held := newHeldServer(t)
+	fw := newProtectFirewall(t, held, Options{Mode: ModeShadow})
+	nested := map[string]any{"run_id": "run-1"}
+	metadata := ClassificationMetadata{"conversationId": "conversation-1", "langgraph": nested}
+	resource := GovernanceResource{Kind: GovernanceTool, ID: "search"}
+
+	_, err := ProtectWithOutput(context.Background(), fw, "prompt", answer,
+		func(reply string) string { return reply },
+		WithMetadata(metadata), WithGovernance(GovernanceContext{Agent: "assistant", Resource: &resource}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata["conversationId"] = "reused"
+	nested["run_id"] = "reused"
+	resource.ID = "reused"
+
+	held.releaseAll()
+	flush(t, fw)
+
+	held.mu.Lock()
+	defer held.mu.Unlock()
+	if len(held.payloads) != 2 {
+		t.Fatalf("payloads = %d, want 2", len(held.payloads))
+	}
+	for _, payload := range held.payloads {
+		sent := *payload.Metadata
+		if sent["conversationId"] != "conversation-1" {
+			t.Errorf("conversationId = %v", sent["conversationId"])
+		}
+		if run := sent["langgraph"].(map[string]any)["run_id"]; run != "run-1" {
+			t.Errorf("run_id = %v", run)
+		}
+	}
+	if sent := held.payloads[0].Resource; sent == nil || sent.ID != "search" {
+		t.Errorf("resource = %+v", sent)
+	}
+}
+
+func TestBackgroundClassificationsAreBoundedAcrossConversations(t *testing.T) {
+	held := newHeldServer(t)
+	fw := newProtectFirewall(t, held, Options{Mode: ModeShadow, MaxConcurrent: 1, MaxQueued: 2})
+
+	for _, text := range []string{"first", "second", "dropped", "dropped"} {
+		if _, err := Protect(context.Background(), fw, text, answer); err != nil {
+			t.Fatal(err)
+		}
+	}
+	held.releaseAll()
+	flush(t, fw)
+
+	texts, _ := held.seen()
+	if len(texts) != 2 || strings.Contains(strings.Join(texts, " "), "dropped") {
+		t.Errorf("texts = %v, want the first two only", texts)
 	}
 }
 
