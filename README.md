@@ -31,6 +31,7 @@ This SDK provides the low-level Go interface for that workflow:
   add one event ID. Individual `Classify` calls use that value as sequence
   identity.
 - Retry transient API Gateway and model-serving failures.
+- Optionally classify in parallel with the model call it protects.
 - Optionally select `standard` or `deep` review for a request. Omitting review
   leaves the backend AppConfig judge setting in control.
 
@@ -42,10 +43,10 @@ This SDK is distributed as a Go module.
 go get github.com/Silmaril-Security/sdk-go/firewall@latest
 ```
 
-Pin v0.7.7 for reproducible installs:
+Pin v0.8.0 for reproducible installs:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.7.7
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.8.0
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -157,6 +158,59 @@ may invoke it concurrently. A panic in that callback is recovered and does not
 fail the classification. If you supply `HTTPClient`, its `Transport` must be
 safe for concurrent `Do` (the Go default transport is).
 
+## Parallel classification
+
+`Protect` runs your operation while its input is classified, instead of
+waiting for the verdict first. It takes the same options as `Classify` and
+returns the operation's result:
+
+```go
+answer, err := firewall.Protect(ctx, fw, prompt,
+    func(ctx context.Context) (string, error) { return callModel(ctx, prompt) },
+    firewall.WithHook(firewall.HookUserInput),
+    firewall.WithMetadata(firewall.ClassificationMetadata{"conversationId": conversationID}),
+)
+```
+
+In Block mode, including the Block default when no mode is set, the result is
+withheld until the verdict arrives. A blocking decision returns
+`*firewall.FirewallBlockedError` and cancels the context passed to the
+operation; `context.Cause` on that context returns the blocking error.
+`Protect` waits for the operation to return before reporting the block, so
+honor the context in long calls. A failed classification is returned the same
+way, and an operation error is returned when the input was allowed. In Shadow
+and Warn the result is returned as soon as the operation finishes, and the
+classification completes in the background.
+
+`ProtectWithOutput` adds a second check. Its extractor returns the text of a
+successful result, which is classified as `HookLLMOutput` before the result is
+returned:
+
+```go
+reply, err := firewall.ProtectWithOutput(ctx, fw, prompt, callModel,
+    func(reply Reply) string { return reply.Text },
+    firewall.WithHook(firewall.HookUserInput),
+)
+```
+
+Use `Protect` only for an operation whose effect can be discarded. Classify
+the arguments of a tool that writes with `Classify` before running it.
+
+Classifications started by `Protect` that share `metadata.conversationId` are
+sent in the order they were started, so parallel checks keep the backend
+sequence intact. `MaxConcurrent` bounds how many are in flight at once. A
+background classification retries once, does not use the caller's
+cancellation, and is dropped when its conversation already holds `MaxQueued`
+unjoined classifications or the client holds `MaxConcurrent` times `MaxQueued`
+of them across all conversations, including calls with no conversation. In
+Block mode the input check and the output check both wait their turn in that
+order, and a canceled context stops `Protect` waiting for its turn. `Protect`
+copies request metadata and the governance resource before it returns, so the
+caller can reuse them. The SDK does not log: a dropped or failed background
+classification is silent, and a completed one reaches `OnClassify`. Call
+`fw.Flush(ctx)` to wait for background classifications, for example before a
+serverless handler returns.
+
 ## Options
 
 ```go
@@ -169,6 +223,8 @@ type Options struct {
     ShadowMode       bool                 // deprecated: true maps to shadow; use ModeBlock for explicit block
     OnClassify       func(ClassifyEvent)  // optional telemetry callback for classification decisions
     Review           firewall.ReviewLevel // optional: standard or deep; empty omits the wire field
+    MaxConcurrent    int                  // default: 32 classifications in flight beside Protect callers
+    MaxQueued        int                  // default: 64 unjoined background classifications per conversation
 }
 ```
 
@@ -184,8 +240,8 @@ Block enforcement default internally. A malicious prediction, or a governance
 `Action` of `block`, returns a typed blocking error in Block mode.
 `ModeShadow` and `ModeWarn` return the result unchanged. `New` rejects an empty
 `APIKey` or `APIURL`, a negative `Timeout`, a `Mode` other than empty,
-`shadow`, `warn`, or `block`, and a nonempty `Review` other than `standard` or
-`deep`.
+`shadow`, `warn`, or `block`, a nonempty `Review` other than `standard` or
+`deep`, and a negative `MaxConcurrent` or `MaxQueued`.
 
 `BlockResult.Governance` is nil when the response omits it. Otherwise it holds
 `Action`, `PolicyVersion`, and optional `RuleID` (`action`, `policy_version`,
@@ -608,6 +664,6 @@ IDs must be non-empty; MCP tools also require their canonical server parent ID.
 The compatibility metadata copy remains attribution only. Caller agent metadata
 does not supply an authenticated principal.
 
-Version v0.7.7 is available as a Go module; see the
-[package documentation](https://pkg.go.dev/github.com/Silmaril-Security/sdk-go@v0.7.7/firewall)
-and [GitHub release](https://github.com/Silmaril-Security/sdk-go/releases/tag/v0.7.7).
+Version v0.8.0 is available as a Go module; see the
+[package documentation](https://pkg.go.dev/github.com/Silmaril-Security/sdk-go@v0.8.0/firewall)
+and [GitHub release](https://github.com/Silmaril-Security/sdk-go/releases/tag/v0.8.0).

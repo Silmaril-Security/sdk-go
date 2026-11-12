@@ -20,7 +20,9 @@ go mod tidy
   when explicitly requested and when they use generic, safe-to-publish data.
   Do not add runnable samples, demos, notebooks, tenant-specific examples, or
   live-service walkthroughs to this public repo unless explicitly requested.
-- Keep `Classify` and `ClassifyBatch` as the public classification APIs.
+- Keep `Classify`, `ClassifyBatch`, and `Protect` as the public classification
+  APIs. `Protect` runs a caller's operation beside `Classify`; it adds no new
+  wire shape.
 - Send each complete sanitized logical event in one request; the Firewall
   backend owns token-window processing and sequence ordering.
 - Do not commit API keys, tenant-specific benchmark notebooks, or deployment

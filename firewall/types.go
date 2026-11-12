@@ -118,6 +118,14 @@ type Options struct {
 	// Review is an optional client default of "standard" or "deep". Empty
 	// omits the wire field so the backend AppConfig remains authoritative.
 	Review ReviewLevel
+	// MaxConcurrent bounds classifications that Protect runs beside the
+	// caller at one time. Zero selects the default of 32.
+	MaxConcurrent int
+	// MaxQueued bounds unjoined background classifications kept for one
+	// conversation; further ones are dropped. Zero selects the default of 64.
+	// Across all conversations, including calls with no conversation, the
+	// client keeps at most MaxConcurrent times MaxQueued of them.
+	MaxQueued int
 }
 
 type classifyConfig struct {

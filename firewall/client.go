@@ -10,8 +10,10 @@ import (
 )
 
 const (
-	defaultMaxRetries = 5
-	defaultTimeout    = 10 * time.Second
+	defaultMaxRetries    = 5
+	defaultTimeout       = 10 * time.Second
+	defaultMaxConcurrent = 32
+	defaultMaxQueued     = 64
 )
 
 // Firewall is a client for the Silmaril Firewall /classify endpoint.
@@ -35,6 +37,7 @@ type Firewall struct {
 	retryMaxBackoff  time.Duration
 	retryJitter      func(time.Duration) time.Duration
 	review           ReviewLevel
+	pending          *pendingVerdicts
 }
 
 // New constructs a Firewall from Options. Returns an error when APIKey or
@@ -57,6 +60,14 @@ func New(opts Options) (*Firewall, error) {
 		if err := validateReview(opts.Review); err != nil {
 			return nil, err
 		}
+	}
+	maxConcurrent, err := limitOrDefault("MaxConcurrent", opts.MaxConcurrent, defaultMaxConcurrent)
+	if err != nil {
+		return nil, err
+	}
+	maxQueued, err := limitOrDefault("MaxQueued", opts.MaxQueued, defaultMaxQueued)
+	if err != nil {
+		return nil, err
 	}
 	timeout := opts.Timeout
 	if timeout < 0 {
@@ -90,7 +101,18 @@ func New(opts Options) (*Firewall, error) {
 		retryMaxBackoff:  30 * time.Second,
 		retryJitter:      fullJitter,
 		review:           opts.Review,
+		pending:          newPendingVerdicts(maxConcurrent, maxQueued),
 	}, nil
+}
+
+func limitOrDefault(name string, value, fallback int) (int, error) {
+	if value < 0 {
+		return 0, fmt.Errorf("firewall: %s must be non-negative, got %d", name, value)
+	}
+	if value == 0 {
+		return fallback, nil
+	}
+	return value, nil
 }
 
 func useLastResponseOnRedirect(_ *http.Request, _ []*http.Request) error {

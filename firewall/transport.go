@@ -22,6 +22,7 @@ func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
 	if err != nil {
 		return fmt.Errorf("firewall: marshal request: %w", err)
 	}
+	maxRetries := f.retryBudget(ctx)
 	for attempt := 0; ; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.apiURL, bytes.NewReader(body))
 		if err != nil {
@@ -34,7 +35,7 @@ func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			if attempt < f.maxRetries {
+			if attempt < maxRetries {
 				if err := waitBeforeRetry(ctx, f.retryDelay(attempt, nil)); err != nil {
 					return err
 				}
@@ -42,7 +43,7 @@ func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
 			}
 			return fmt.Errorf("firewall: request failed: %w", err)
 		}
-		if isRetryableStatus(resp.StatusCode) && attempt < f.maxRetries {
+		if isRetryableStatus(resp.StatusCode) && attempt < maxRetries {
 			wait := f.retryDelay(attempt, resp)
 			drainAndClose(resp.Body)
 			if err := waitBeforeRetry(ctx, wait); err != nil {
