@@ -19,6 +19,7 @@ jobs:
   verify_tag:
     name: Verify pushed tag
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: startsWith(github.ref, 'refs/tags/')
     steps:
       - name: Checkout
@@ -41,6 +42,7 @@ jobs:
   release:
     name: Release from main
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     if: github.ref == 'refs/heads/main'
     permissions:
       contents: write
@@ -182,11 +184,46 @@ jobs:
           retention-days: 7
           path: results/
           if-no-files-found: warn
+      - name: Reset evidence for the parallel-protection journey
+        if: steps.configured.outputs.ready == 'true'
+        run: rm -rf results
+      - name: Customer journey with parallel protection
+        if: steps.configured.outputs.ready == 'true'
+        id: acceptance_protect
+        uses: ./_customer
+        with:
+          sdk: go
+          artifact: ${{ steps.package.outputs.path }}
+          consumer: customer/consumer_protect.go
+          source-sha: ${{ github.sha }}
+          framework-sha: 1a77a9bfcb634c2851fb966261f4413e1542e158
+        env:
+          SILMARIL_API_URL: ${{ vars.CUSTOMER_API_URL }}
+          SILMARIL_API_KEY: ${{ secrets.CUSTOMER_API_KEY }}
+          CUSTOMER_BACKEND_ID: ${{ vars.CUSTOMER_BACKEND_ID }}
+          CUSTOMER_TESTS_READ_TOKEN: ${{ steps.reader.outputs.token }}
+          CUSTOMER_UI_URL: ${{ vars.CUSTOMER_UI_URL }}
+          CUSTOMER_LOGIN_EMAIL: ${{ secrets.CUSTOMER_LOGIN_EMAIL }}
+          CUSTOMER_LOGIN_PASSWORD: ${{ secrets.CUSTOMER_LOGIN_PASSWORD }}
+          CUSTOMER_ORGANIZATION_ID: ${{ vars.CUSTOMER_ORGANIZATION_ID }}
+          CUSTOMER_UI_STORAGE_STATE_JSON: ${{ secrets.CUSTOMER_UI_STORAGE_STATE_JSON }}
+          CUSTOMER_FIREWALL_ID: ${{ vars.CUSTOMER_FIREWALL_ID }}
+          CUSTOMER_MCP_URL: ${{ vars.CUSTOMER_MCP_URL }}
+          CUSTOMER_MCP_ACCESS_TOKEN: ${{ secrets.CUSTOMER_MCP_ACCESS_TOKEN }}
+      - name: Upload parallel-protection customer evidence
+        if: always() && steps.acceptance_protect.outcome != 'skipped'
+        uses: actions/upload-artifact@v4
+        with:
+          name: customer-qualification-protect
+          retention-days: 7
+          path: results/
+          if-no-files-found: warn
       - name: Enforce qualified rollout
         if: steps.selection.outputs.should_test == 'true' || steps.plan.outputs.should_release == 'true'
         env:
           OUTCOME: ${{ steps.acceptance.outcome }}
-        run: test "$OUTCOME" = success
+          PROTECT_OUTCOME: ${{ steps.acceptance_protect.outcome }}
+        run: test "$OUTCOME" = success && test "$PROTECT_OUTCOME" = success
 
       - name: Extract changelog notes
         id: changelog

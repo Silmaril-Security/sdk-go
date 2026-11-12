@@ -7,7 +7,9 @@
 // application continues execution. Classify and ClassifyBatch enforce backend
 // blocking decisions by default and return FirewallBlockedError or
 // BatchFirewallBlockedError when the Firewall blocks a request. Enable shadow
-// mode to observe decisions without interrupting traffic.
+// mode to observe decisions without interrupting traffic. Protect runs a
+// caller's operation while its input is classified and withholds the result of
+// a blocked input.
 //
 // The package is dependency-free outside the Go standard library. Long inputs
 // are sent as complete logical events, and SDK metadata carries one event ID

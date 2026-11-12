@@ -52,10 +52,18 @@ type batchResponse struct {
 
 // Classify classifies one complete logical event in a single request.
 func (f *Firewall) Classify(ctx context.Context, text string, opts ...ClassifyOption) (BlockResult, error) {
+	return f.classifyConfigured(ctx, text, newClassifyConfig(opts))
+}
+
+func newClassifyConfig(opts []ClassifyOption) classifyConfig {
 	var cfg classifyConfig
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	return cfg
+}
+
+func (f *Firewall) classifyConfigured(ctx context.Context, text string, cfg classifyConfig) (BlockResult, error) {
 	if cfg.requestID == "" {
 		cfg.requestID = newRequestID()
 	}

@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.8.0
+
+- Add `Protect` and `ProtectWithOutput`, which run an operation while its
+  input is classified. In Block mode the result is withheld until the verdict
+  and a block cancels the operation's context; in Shadow and Warn the result
+  returns immediately and the classification finishes in the background.
+- Send classifications started by `Protect` that share
+  `metadata.conversationId` in the order they were started. Background
+  classifications retry once.
+- Add `Options.MaxConcurrent` (default 32) and `Options.MaxQueued` (default
+  64), and `Firewall.Flush` to wait for background classifications.
+
 ## v0.7.7
 
 - Reject null elements in `outcome_scores`, `detector_scores`, and
