@@ -58,8 +58,9 @@ func TestClassifyRequiresNumericVerdictFields(t *testing.T) {
 					result, err = fw.Classify(context.Background(), "hello")
 				}
 				if tc.invalidField != "" {
-					if err == nil || !strings.Contains(err.Error(), tc.invalidField) {
-						t.Fatalf("classification error = %v, want invalid %s", err, tc.invalidField)
+					want := "firewall: response " + tc.invalidField + " must be a number between 0 and 1"
+					if err == nil || !strings.Contains(err.Error(), want) {
+						t.Fatalf("classification error = %v, want %q", err, want)
 					}
 					if callbacks != 0 {
 						t.Errorf("OnClassify ran %d times for an invalid verdict", callbacks)

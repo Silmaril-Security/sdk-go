@@ -51,22 +51,32 @@ func (r *singleResponse) UnmarshalJSON(data []byte) error {
 	type responseFields singleResponse
 	var wire struct {
 		responseFields
-		Score     *float64 `json:"score"`
-		Threshold *float64 `json:"threshold"`
+		Score     json.RawMessage `json:"score"`
+		Threshold json.RawMessage `json:"threshold"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return err
 	}
-	if wire.Score == nil || *wire.Score < 0 || *wire.Score > 1 {
-		return fmt.Errorf("firewall: response score must be a number between 0 and 1")
+	score, err := decodeVerdictNumber("score", wire.Score)
+	if err != nil {
+		return err
 	}
-	if wire.Threshold == nil || *wire.Threshold < 0 || *wire.Threshold > 1 {
-		return fmt.Errorf("firewall: response threshold must be a number between 0 and 1")
+	threshold, err := decodeVerdictNumber("threshold", wire.Threshold)
+	if err != nil {
+		return err
 	}
 	*r = singleResponse(wire.responseFields)
-	r.Score = *wire.Score
-	r.Threshold = *wire.Threshold
+	r.Score = score
+	r.Threshold = threshold
 	return nil
+}
+
+func decodeVerdictNumber(field string, encoded json.RawMessage) (float64, error) {
+	var value *float64
+	if err := json.Unmarshal(encoded, &value); err != nil || value == nil || *value < 0 || *value > 1 {
+		return 0, fmt.Errorf("firewall: response %s must be a number between 0 and 1", field)
+	}
+	return *value, nil
 }
 
 type batchResponse struct {
