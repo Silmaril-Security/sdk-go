@@ -70,7 +70,7 @@ func TestRequestResourceValidationBeforeTransport(t *testing.T) {
 
 func TestResponseResourceValidation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"prediction":"BENIGN","score":0.1,"governance":{"action":"allow","policy_version":"schema6","resource":{"kind":"mcp_tool","id":"search"}}}`))
+		_, _ = w.Write([]byte(`{"prediction":"BENIGN","score":0.1,"threshold":0.5,"governance":{"action":"allow","policy_version":"schema6","resource":{"kind":"mcp_tool","id":"search"}}}`))
 	}))
 	defer server.Close()
 	fw, err := New(Options{APIKey: "sk-test", APIURL: server.URL})
@@ -92,7 +92,8 @@ func TestNullableBatchResourceOrder(t *testing.T) {
 		if len(resources) != 3 || resources[0] != nil || resources[2] != nil || resources[1].(map[string]any)["id"] != "blocked-plugin" {
 			t.Errorf("wrong alignment: %#v", resources)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"predictions": []map[string]any{{"prediction": "BENIGN", "score": 0.1}, {"prediction": "BENIGN", "score": 0.1}, {"prediction": "BENIGN", "score": 0.1}}})
+		verdict := singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5}
+		_ = json.NewEncoder(w).Encode(batchResponse{Predictions: []singleResponse{verdict, verdict, verdict}})
 	}))
 	defer server.Close()
 	fw, err := New(Options{APIKey: "sk-test", APIURL: server.URL})

@@ -4,6 +4,7 @@ package firewall
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -43,6 +44,29 @@ type singleResponse struct {
 	// acknowledgement; any other JSON value is a compatibility error. Omitted
 	// selections ignore the field, including unexpected types.
 	Review any `json:"review,omitempty"`
+}
+
+// UnmarshalJSON distinguishes absent or null diagnostics from valid zero values.
+func (r *singleResponse) UnmarshalJSON(data []byte) error {
+	type responseFields singleResponse
+	var wire struct {
+		responseFields
+		Score     *float64 `json:"score"`
+		Threshold *float64 `json:"threshold"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.Score == nil || *wire.Score < 0 || *wire.Score > 1 {
+		return fmt.Errorf("firewall: response score must be a number between 0 and 1")
+	}
+	if wire.Threshold == nil || *wire.Threshold < 0 || *wire.Threshold > 1 {
+		return fmt.Errorf("firewall: response threshold must be a number between 0 and 1")
+	}
+	*r = singleResponse(wire.responseFields)
+	r.Score = *wire.Score
+	r.Threshold = *wire.Threshold
+	return nil
 }
 
 type batchResponse struct {
