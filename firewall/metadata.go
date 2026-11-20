@@ -3,8 +3,11 @@
 package firewall
 
 import (
+	"bytes"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
+	"maps"
 	"time"
 )
 
@@ -39,21 +42,9 @@ func sdkMetadata(
 			out[key] = value
 		}
 	}
-	namespace := map[string]any{}
-	if raw, ok := out["silmaril"]; ok && raw != nil {
-		existing, ok := raw.(map[string]any)
-		if !ok {
-			if typed, typedOK := raw.(ClassificationMetadata); typedOK {
-				existing = map[string]any(typed)
-				ok = true
-			}
-		}
-		if !ok {
-			return nil, fmt.Errorf("firewall: metadata.silmaril must be an object when provided")
-		}
-		for key, value := range existing {
-			namespace[key] = value
-		}
+	namespace, err := copyMetadataNamespace(out["silmaril"])
+	if err != nil {
+		return nil, err
 	}
 	namespace["sdk_language"] = "go"
 	namespace["sdk_version"] = SDKVersion
@@ -63,6 +54,29 @@ func sdkMetadata(
 	}
 	out["silmaril"] = namespace
 	return &out, nil
+}
+
+// copyMetadataNamespace normalizes JSON objects without modifying caller values.
+func copyMetadataNamespace(raw any) (map[string]any, error) {
+	namespace := map[string]any{}
+	switch object := raw.(type) {
+	case nil:
+	case map[string]any:
+		maps.Copy(namespace, object)
+	case ClassificationMetadata:
+		maps.Copy(namespace, object)
+	default:
+		encoded, err := json.Marshal(object)
+		if err != nil {
+			return nil, fmt.Errorf("firewall: metadata.silmaril must be an object when provided: %w", err)
+		}
+		decoder := json.NewDecoder(bytes.NewReader(encoded))
+		decoder.UseNumber()
+		if err := decoder.Decode(&namespace); err != nil || namespace == nil {
+			return nil, fmt.Errorf("firewall: metadata.silmaril must be an object when provided")
+		}
+	}
+	return namespace, nil
 }
 
 func setGovernanceMetadata(metadata *ClassificationMetadata, context *GovernanceContext) {
