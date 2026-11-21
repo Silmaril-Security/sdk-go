@@ -116,6 +116,16 @@ func TestBlockResultFromResponseValidatesOutcomeFields(t *testing.T) {
 			want: "invalid detector_scores key",
 		},
 		{
+			name: "negative outcome score",
+			resp: singleResponse{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, OutcomeScores: map[string]float64{"future_outcome": -0.1}},
+			want: "outcome_scores value",
+		},
+		{
+			name: "detector score above one",
+			resp: singleResponse{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, DetectorScores: map[string]float64{"future_detector": 1.1}},
+			want: "detector_scores value",
+		},
+		{
 			name: "benign detector counts",
 			resp: singleResponse{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, DetectorCounts: map[string]int{string(OutcomeBenign): 1}},
 			want: "invalid detector_counts key",
