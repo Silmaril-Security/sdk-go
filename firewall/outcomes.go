@@ -2,7 +2,10 @@
 
 package firewall
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 // PrimaryOutcome is the canonical outcome label for a classification result.
 type PrimaryOutcome string
@@ -166,6 +169,9 @@ func normalizeHarmfulOutcomeFloatMap(values map[string]float64, fieldName string
 		outcome, err := normalizeHarmfulOutcome(key, fieldName+" key")
 		if err != nil {
 			return nil, err
+		}
+		if math.IsNaN(value) || value < 0 || value > 1 {
+			return nil, fmt.Errorf("firewall: %s value for %q must be a number between 0 and 1", fieldName, key)
 		}
 		out[outcome] = value
 	}
