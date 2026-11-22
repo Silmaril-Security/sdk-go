@@ -43,10 +43,10 @@ This SDK is distributed as a Go module.
 go get github.com/Silmaril-Security/sdk-go/firewall@latest
 ```
 
-Pin v0.8.0 for reproducible installs:
+Pin v0.8.1 for reproducible installs:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.8.0
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.8.1
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -251,7 +251,10 @@ may also return optional `Resource`, `IdentityRevision`, and `Reason`
 `kind`, `id`, and `parent_id` shape as `GovernanceResource`; `Reason` is an
 open string so newer runtime reasons are preserved. Older runtimes may omit
 these fields or return null, which leaves their Go values nil or empty. A
-non-nil decision whose `Action` is not `allow` or `block`, whose
+present `identity_revision` or `reason` must contain a non-whitespace
+character; accepted values are preserved exactly, including surrounding
+whitespace. Any response resource other than an MCP tool must omit `parent_id` or return null.
+A non-nil decision whose `Action` is not `allow` or `block`, whose
 `PolicyVersion` is empty, or whose returned resource is invalid is an error.
 `Action` `block` sets `ClassifyEvent.Blocked` even when `Prediction` is benign.
 `WithGovernance` and `WithBatchGovernance` send optional `Agent` and `Resource`
@@ -664,6 +667,6 @@ IDs must be non-empty; MCP tools also require their canonical server parent ID.
 The compatibility metadata copy remains attribution only. Caller agent metadata
 does not supply an authenticated principal.
 
-Version v0.8.0 is available as a Go module; see the
-[package documentation](https://pkg.go.dev/github.com/Silmaril-Security/sdk-go@v0.8.0/firewall)
-and [GitHub release](https://github.com/Silmaril-Security/sdk-go/releases/tag/v0.8.0).
+For the v0.8.1 Go module, see the
+[package documentation](https://pkg.go.dev/github.com/Silmaril-Security/sdk-go@v0.8.1/firewall)
+and [GitHub release](https://github.com/Silmaril-Security/sdk-go/releases/tag/v0.8.1).

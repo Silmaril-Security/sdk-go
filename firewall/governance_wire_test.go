@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
@@ -79,6 +81,159 @@ func TestResponseResourceValidation(t *testing.T) {
 	}
 	if _, err := fw.Classify(context.Background(), "synthetic"); err == nil {
 		t.Fatal("response accepted an invalid canonical governance resource")
+	}
+}
+
+func TestGovernanceOptionalStringWireValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		fields           string
+		identityRevision string
+		reason           string
+		errorContains    string
+	}{
+		{name: "omitted"},
+		{name: "null", fields: `,"identity_revision":null,"reason":null`},
+		{
+			name:             "preserves nonblank whitespace",
+			fields:           `,"identity_revision":"  identity-r9\t","reason":"\tfuture reason  "`,
+			identityRevision: "  identity-r9\t",
+			reason:           "\tfuture reason  ",
+		},
+		{name: "empty identity revision", fields: `,"identity_revision":""`, errorContains: "governance identity_revision must be null, omitted, or a non-blank string"},
+		{name: "blank identity revision", fields: `,"identity_revision":" \t "`, errorContains: "governance identity_revision must be null, omitted, or a non-blank string"},
+		{name: "numeric identity revision", fields: `,"identity_revision":7`, errorContains: "cannot unmarshal number"},
+		{name: "empty reason", fields: `,"reason":""`, errorContains: "governance reason must be null, omitted, or a non-blank string"},
+		{name: "blank reason", fields: `,"reason":" \n "`, errorContains: "governance reason must be null, omitted, or a non-blank string"},
+		{name: "boolean reason", fields: `,"reason":true`, errorContains: "cannot unmarshal bool"},
+	} {
+		for _, batch := range []bool{false, true} {
+			shape := "single"
+			if batch {
+				shape = "batch"
+			}
+			t.Run(tc.name+"/"+shape, func(t *testing.T) {
+				decision := `{"action":"allow","policy_version":"schema6","rule_id":"rule-1"` + tc.fields + `}`
+				body := `{"prediction":"BENIGN","score":0.1,"threshold":0.5,"governance":` + decision + `}`
+				if batch {
+					body = `{"predictions":[` + body + `]}`
+				}
+				fw, err := New(Options{
+					APIKey: "sk-test",
+					APIURL: "https://firewall.test/classify",
+					HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+					})},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var got *GovernanceDecision
+				if batch {
+					results, classifyErr := fw.ClassifyBatch(context.Background(), []string{"synthetic"})
+					err = classifyErr
+					if err == nil {
+						got = results[0].Governance
+					}
+				} else {
+					result, classifyErr := fw.Classify(context.Background(), "synthetic")
+					err = classifyErr
+					if err == nil {
+						got = result.Governance
+					}
+				}
+				if tc.errorContains != "" {
+					if err == nil || !strings.Contains(err.Error(), tc.errorContains) {
+						t.Fatalf("classification error = %v, want substring %q", err, tc.errorContains)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got == nil || got.Action != GovernanceAllow || got.PolicyVersion != "schema6" || got.RuleID != "rule-1" ||
+					got.IdentityRevision != tc.identityRevision || got.Reason != tc.reason {
+					t.Fatalf("governance decision = %+v", got)
+				}
+			})
+		}
+	}
+}
+
+func TestResponseNonMCPParentIDMustBeNullOrOmitted(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		parentID string
+		valid    bool
+		wantErr  string
+	}{
+		{name: "omitted", valid: true},
+		{name: "null", parentID: `,"parent_id":null`, valid: true},
+		{name: "empty string", parentID: `,"parent_id":""`, wantErr: "parent_id must be null or omitted for non-mcp_tool"},
+		{name: "numeric", parentID: `,"parent_id":7`, wantErr: "cannot unmarshal number"},
+	} {
+		for _, batch := range []bool{false, true} {
+			shape := "single"
+			if batch {
+				shape = "batch"
+			}
+			t.Run(tc.name+"/"+shape, func(t *testing.T) {
+				body := `{"prediction":"BENIGN","score":0.1,"threshold":0.5,"governance":{"action":"allow","policy_version":"schema6","resource":{"kind":"plugin","id":"plugin-1"` + tc.parentID + `}}}`
+				if batch {
+					body = `{"predictions":[` + body + `]}`
+				}
+				fw, err := New(Options{
+					APIKey: "sk-test",
+					APIURL: "https://firewall.test/classify",
+					HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+					})},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if batch {
+					_, err = fw.ClassifyBatch(context.Background(), []string{"synthetic"})
+				} else {
+					_, err = fw.Classify(context.Background(), "synthetic")
+				}
+				if tc.valid && err != nil {
+					t.Fatal(err)
+				}
+				if !tc.valid && (err == nil || !strings.Contains(err.Error(), tc.wantErr)) {
+					t.Fatalf("classification error = %v, want substring %q", err, tc.wantErr)
+				}
+			})
+		}
+	}
+}
+
+func TestRequestNonMCPEmptyParentIDRemainsOmitted(t *testing.T) {
+	fw, err := New(Options{
+		APIKey: "sk-test",
+		APIURL: "https://firewall.test/classify",
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			var body map[string]any
+			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+				return nil, err
+			}
+			resource := body["resource"].(map[string]any)
+			if _, exists := resource["parent_id"]; exists {
+				t.Errorf("request resource contains parent_id: %#v", resource)
+			}
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(
+				`{"prediction":"BENIGN","score":0.1,"threshold":0.5}`,
+			))}, nil
+		})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = fw.Classify(context.Background(), "synthetic", WithGovernance(GovernanceContext{
+		Resource: &GovernanceResource{Kind: GovernancePlugin, ID: "plugin-1", ParentID: ""},
+	}))
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
