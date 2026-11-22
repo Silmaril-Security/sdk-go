@@ -5,6 +5,8 @@ package firewall
 import (
 	"fmt"
 	"math"
+	"strings"
+	"unicode"
 )
 
 // PrimaryOutcome is the canonical outcome label for a classification result.
@@ -146,15 +148,21 @@ func IsHarmfulOutcome(value HarmfulOutcome) bool {
 	return ok
 }
 
+func isPythonBlank(value string) bool {
+	return strings.TrimFunc(value, func(r rune) bool {
+		return unicode.IsSpace(r) || r >= '\u001c' && r <= '\u001f'
+	}) == ""
+}
+
 func normalizePrimaryOutcome(value string, fieldName string) (PrimaryOutcome, error) {
-	if value == "" {
+	if isPythonBlank(value) {
 		return "", fmt.Errorf("firewall: invalid %s %q", fieldName, value)
 	}
 	return PrimaryOutcome(value), nil
 }
 
 func normalizeHarmfulOutcome(value string, fieldName string) (HarmfulOutcome, error) {
-	if value == "" || value == string(OutcomeBenign) {
+	if isPythonBlank(value) || value == string(OutcomeBenign) {
 		return "", fmt.Errorf("firewall: invalid %s %q", fieldName, value)
 	}
 	return HarmfulOutcome(value), nil

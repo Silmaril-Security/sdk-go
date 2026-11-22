@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.2
+
+- Match Python `str.strip()` when validating response outcome labels, including
+  non-ASCII whitespace and separator controls. Nonblank labels remain
+  unmodified, and U+FEFF remains nonblank.
+
 ## v0.8.1
 
 - Reject missing, null, nonnumeric, or out-of-range response `score` and
