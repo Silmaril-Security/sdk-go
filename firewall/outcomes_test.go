@@ -174,6 +174,181 @@ func TestBlockResultFromResponseDecodesFutureOutcomeLabels(t *testing.T) {
 	}
 }
 
+func TestClassifyRejectsPythonBlankOutcomeLabels(t *testing.T) {
+	blankLabels := []struct {
+		name  string
+		label string
+	}{
+		{name: "NEL", label: "\u0085"},
+		{name: "no-break space", label: "\u00a0"},
+		{name: "file separator", label: "\u001c"},
+		{name: "group separator", label: "\u001d"},
+		{name: "record separator", label: "\u001e"},
+		{name: "unit separator", label: "\u001f"},
+		{
+			name:  "mixed whitespace",
+			label: " \t\n\v\f\r\u001c\u001d\u001e\u001f\u0085\u00a0\u1680\u2003\u2028\u2029\u202f\u205f\u3000",
+		},
+	}
+	fields := []struct {
+		name  string
+		value func(string) any
+	}{
+		{name: "primary_outcome", value: func(label string) any { return label }},
+		{name: "outcome_scores", value: func(label string) any { return map[string]float64{label: 0.2} }},
+		{name: "detector_scores", value: func(label string) any { return map[string]float64{label: 0.3} }},
+		{name: "detector_counts", value: func(label string) any { return map[string]int{label: 1} }},
+	}
+
+	for _, label := range blankLabels {
+		for _, field := range fields {
+			t.Run(label.name+"/"+field.name, func(t *testing.T) {
+				_, err := classifyOutcomeResponse(t, map[string]any{field.name: field.value(label.label)})
+				if err == nil {
+					t.Fatal("expected blank outcome label error")
+				}
+				if want := "invalid " + field.name; !strings.Contains(err.Error(), want) {
+					t.Fatalf("error = %q, want substring %q", err, want)
+				}
+			})
+		}
+	}
+}
+
+func TestClassifyPreservesPythonNonblankOutcomeLabels(t *testing.T) {
+	labels := []struct {
+		name  string
+		label string
+	}{
+		{name: "padded unknown label", label: " \u0085future_outcome\u00a0 "},
+		{name: "padded benign label", label: " benign "},
+		{name: "byte order mark", label: "\u00a0\ufeff\u0085"},
+	}
+
+	for _, tc := range labels {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := classifyOutcomeResponse(t, map[string]any{
+				"primary_outcome": tc.label,
+				"outcome_scores":  map[string]float64{tc.label: 0.2},
+				"detector_scores": map[string]float64{tc.label: 0.3},
+				"detector_counts": map[string]int{tc.label: 1},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := HarmfulOutcome(tc.label)
+			if result.PrimaryOutcome != PrimaryOutcome(tc.label) {
+				t.Errorf("PrimaryOutcome = %q, want %q", result.PrimaryOutcome, tc.label)
+			}
+			if len(result.OutcomeScores) != 1 || result.OutcomeScores[key] != 0.2 {
+				t.Errorf("OutcomeScores = %#v, want exact key %q", result.OutcomeScores, tc.label)
+			}
+			if len(result.DetectorScores) != 1 || result.DetectorScores[key] != 0.3 {
+				t.Errorf("DetectorScores = %#v, want exact key %q", result.DetectorScores, tc.label)
+			}
+			if len(result.DetectorCounts) != 1 || result.DetectorCounts[key] != 1 {
+				t.Errorf("DetectorCounts = %#v, want exact key %q", result.DetectorCounts, tc.label)
+			}
+		})
+	}
+}
+
+func TestClassifyOutcomeLabelsPreserveAbsentAndNull(t *testing.T) {
+	cases := []struct {
+		name   string
+		fields map[string]any
+	}{
+		{name: "absent"},
+		{
+			name: "null",
+			fields: map[string]any{
+				"primary_outcome": nil,
+				"outcome_scores":  nil,
+				"detector_scores": nil,
+				"detector_counts": nil,
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result, err := classifyOutcomeResponse(t, tc.fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.PrimaryOutcome != "" {
+				t.Errorf("PrimaryOutcome = %q, want empty", result.PrimaryOutcome)
+			}
+			if result.OutcomeScores != nil || result.DetectorScores != nil || result.DetectorCounts != nil {
+				t.Errorf(
+					"maps = %#v, %#v, %#v; want nil",
+					result.OutcomeScores,
+					result.DetectorScores,
+					result.DetectorCounts,
+				)
+			}
+		})
+	}
+}
+
+func TestClassifyRejectsExactBenignHarmfulKeys(t *testing.T) {
+	fields := []struct {
+		name  string
+		value any
+	}{
+		{name: "outcome_scores", value: map[string]float64{"benign": 0.2}},
+		{name: "detector_scores", value: map[string]float64{"benign": 0.3}},
+		{name: "detector_counts", value: map[string]int{"benign": 1}},
+	}
+
+	for _, field := range fields {
+		t.Run(field.name, func(t *testing.T) {
+			_, err := classifyOutcomeResponse(t, map[string]any{field.name: field.value})
+			if err == nil {
+				t.Fatal("expected benign harmful key error")
+			}
+			if want := "invalid " + field.name + " key"; !strings.Contains(err.Error(), want) {
+				t.Fatalf("error = %q, want substring %q", err, want)
+			}
+		})
+	}
+}
+
+func classifyOutcomeResponse(t *testing.T, fields map[string]any) (BlockResult, error) {
+	t.Helper()
+
+	body := map[string]any{
+		"prediction": "BENIGN",
+		"score":      0.1,
+		"threshold":  0.5,
+	}
+	for key, value := range fields {
+		body[key] = value
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fw, err := New(Options{
+		APIKey: "sk",
+		APIURL: "https://example.com",
+		HTTPClient: &http.Client{
+			Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(string(encoded))),
+					Request:    req,
+				}, nil
+			}),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fw.Classify(context.Background(), "test")
+}
+
 func TestSingleResponseOutcomeMapsRejectInvalidElements(t *testing.T) {
 	cases := []struct {
 		name      string
