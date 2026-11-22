@@ -46,15 +46,22 @@ type singleResponse struct {
 	Review any `json:"review,omitempty"`
 }
 
-// UnmarshalJSON distinguishes absent or null diagnostics from valid zero values.
+// UnmarshalJSON distinguishes absent or null diagnostics from valid zero
+// values and validates response-only governance wire constraints without
+// changing the public governance types.
 func (r *singleResponse) UnmarshalJSON(data []byte) error {
 	type responseFields singleResponse
 	var wire struct {
 		responseFields
-		Score     json.RawMessage `json:"score"`
-		Threshold json.RawMessage `json:"threshold"`
+		Score      json.RawMessage `json:"score"`
+		Threshold  json.RawMessage `json:"threshold"`
+		Governance json.RawMessage `json:"governance"`
 	}
 	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	governance, err := decodeResponseGovernance(wire.Governance)
+	if err != nil {
 		return err
 	}
 	score, err := decodeVerdictNumber("score", wire.Score)
@@ -68,7 +75,67 @@ func (r *singleResponse) UnmarshalJSON(data []byte) error {
 	*r = singleResponse(wire.responseFields)
 	r.Score = score
 	r.Threshold = threshold
+	r.Governance = governance
 	return nil
+}
+
+type responseGovernanceDecision struct {
+	Action           GovernanceAction            `json:"action"`
+	PolicyVersion    string                      `json:"policy_version"`
+	RuleID           string                      `json:"rule_id,omitempty"`
+	Resource         *responseGovernanceResource `json:"resource"`
+	IdentityRevision *string                     `json:"identity_revision"`
+	Reason           *string                     `json:"reason"`
+}
+
+type responseGovernanceResource struct {
+	Kind     GovernanceResourceKind `json:"kind"`
+	ID       string                 `json:"id,omitempty"`
+	ParentID *string                `json:"parent_id"`
+}
+
+func decodeResponseGovernance(encoded json.RawMessage) (*GovernanceDecision, error) {
+	if len(encoded) == 0 {
+		return nil, nil
+	}
+	var wire *responseGovernanceDecision
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		return nil, err
+	}
+	if wire == nil {
+		return nil, nil
+	}
+	if wire.IdentityRevision != nil && strings.TrimSpace(*wire.IdentityRevision) == "" {
+		return nil, fmt.Errorf("firewall: response governance identity_revision must be null, omitted, or a non-blank string")
+	}
+	if wire.Reason != nil && strings.TrimSpace(*wire.Reason) == "" {
+		return nil, fmt.Errorf("firewall: response governance reason must be null, omitted, or a non-blank string")
+	}
+	decision := &GovernanceDecision{
+		Action:        wire.Action,
+		PolicyVersion: wire.PolicyVersion,
+		RuleID:        wire.RuleID,
+	}
+	if wire.IdentityRevision != nil {
+		decision.IdentityRevision = *wire.IdentityRevision
+	}
+	if wire.Reason != nil {
+		decision.Reason = *wire.Reason
+	}
+	if wire.Resource != nil {
+		resource := &GovernanceResource{
+			Kind: wire.Resource.Kind,
+			ID:   wire.Resource.ID,
+		}
+		if wire.Resource.ParentID != nil {
+			resource.ParentID = *wire.Resource.ParentID
+			if resource.Kind != GovernanceMCPTool && resource.ParentID == "" {
+				return nil, fmt.Errorf("firewall: response governance resource parent_id must be null or omitted for non-mcp_tool")
+			}
+		}
+		decision.Resource = resource
+	}
+	return decision, nil
 }
 
 func decodeVerdictNumber(field string, encoded json.RawMessage) (float64, error) {

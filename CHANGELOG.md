@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.8.1
+
+- Reject missing, null, nonnumeric, or out-of-range response `score` and
+  `threshold` values, and reject outcome and detector scores outside the
+  inclusive range from 0 to 1.
+- Correct `metadata.silmaril` handling for concrete and named Go map types
+  that encode as JSON objects, preserving integer precision and rejecting
+  values that do not encode as objects.
+- Tighten governance response decoding: optional `identity_revision` and
+  `reason` strings may be null or omitted but must be nonblank when present,
+  and a resource other than an MCP tool may not return `parent_id` as an empty string.
+  Nonblank evidence strings are preserved exactly.
+
 ## v0.8.0
 
 - Add `Protect` and `ProtectWithOutput`, which run an operation while its
