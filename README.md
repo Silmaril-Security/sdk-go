@@ -43,10 +43,10 @@ This SDK is distributed as a Go module.
 go get github.com/Silmaril-Security/sdk-go/firewall@latest
 ```
 
-Pin v0.8.2 for reproducible installs:
+Pin v0.8.3 for reproducible installs:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.8.2
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.8.3
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -667,6 +667,6 @@ IDs must be non-empty; MCP tools also require their canonical server parent ID.
 The compatibility metadata copy remains attribution only. Caller agent metadata
 does not supply an authenticated principal.
 
-For the v0.8.1 Go module, see the
-[package documentation](https://pkg.go.dev/github.com/Silmaril-Security/sdk-go@v0.8.1/firewall)
-and [GitHub release](https://github.com/Silmaril-Security/sdk-go/releases/tag/v0.8.1).
+For the v0.8.3 Go module, see the
+[package documentation](https://pkg.go.dev/github.com/Silmaril-Security/sdk-go@v0.8.3/firewall)
+and [GitHub release](https://github.com/Silmaril-Security/sdk-go/releases/tag/v0.8.3).

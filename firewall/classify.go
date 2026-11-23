@@ -105,10 +105,10 @@ func decodeResponseGovernance(encoded json.RawMessage) (*GovernanceDecision, err
 	if wire == nil {
 		return nil, nil
 	}
-	if wire.IdentityRevision != nil && strings.TrimSpace(*wire.IdentityRevision) == "" {
+	if wire.IdentityRevision != nil && isPythonBlank(*wire.IdentityRevision) {
 		return nil, fmt.Errorf("firewall: response governance identity_revision must be null, omitted, or a non-blank string")
 	}
-	if wire.Reason != nil && strings.TrimSpace(*wire.Reason) == "" {
+	if wire.Reason != nil && isPythonBlank(*wire.Reason) {
 		return nil, fmt.Errorf("firewall: response governance reason must be null, omitted, or a non-blank string")
 	}
 	decision := &GovernanceDecision{
