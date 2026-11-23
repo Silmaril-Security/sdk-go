@@ -12,7 +12,7 @@ import (
 )
 
 // SDKVersion is the semantic version reported in metadata.silmaril.
-const SDKVersion = "0.8.2"
+const SDKVersion = "0.8.3"
 
 func newRequestID() string {
 	var b [16]byte

@@ -100,11 +100,19 @@ func TestGovernanceOptionalStringWireValidation(t *testing.T) {
 			identityRevision: "  identity-r9\t",
 			reason:           "\tfuture reason  ",
 		},
+		{
+			name:             "preserves Python nonblank byte order mark",
+			fields:           `,"identity_revision":"\u00a0\ufeff\u0085","reason":"\u001cfuture reason\u3000"`,
+			identityRevision: "\u00a0\ufeff\u0085",
+			reason:           "\u001cfuture reason\u3000",
+		},
 		{name: "empty identity revision", fields: `,"identity_revision":""`, errorContains: "governance identity_revision must be null, omitted, or a non-blank string"},
 		{name: "blank identity revision", fields: `,"identity_revision":" \t "`, errorContains: "governance identity_revision must be null, omitted, or a non-blank string"},
+		{name: "Python-blank identity revision", fields: `,"identity_revision":"\u001c\u001d\u001e\u001f\u0085\u00a0\u1680\u2003\u2028\u2029\u202f\u205f\u3000"`, errorContains: "governance identity_revision must be null, omitted, or a non-blank string"},
 		{name: "numeric identity revision", fields: `,"identity_revision":7`, errorContains: "cannot unmarshal number"},
 		{name: "empty reason", fields: `,"reason":""`, errorContains: "governance reason must be null, omitted, or a non-blank string"},
 		{name: "blank reason", fields: `,"reason":" \n "`, errorContains: "governance reason must be null, omitted, or a non-blank string"},
+		{name: "Python-blank reason", fields: `,"reason":"\u001c\u0085\u00a0\u2007\u2029\u3000"`, errorContains: "governance reason must be null, omitted, or a non-blank string"},
 		{name: "boolean reason", fields: `,"reason":true`, errorContains: "cannot unmarshal bool"},
 	} {
 		for _, batch := range []bool{false, true} {

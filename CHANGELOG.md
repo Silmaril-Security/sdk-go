@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.8.3
+
+- Match Python `str.strip()` when validating optional governance
+  `identity_revision` and `reason` evidence. Omitted and null values remain
+  compatible, and accepted nonblank strings remain unmodified.
+
 ## v0.8.2
 
 - Match Python `str.strip()` when validating response outcome labels, including
