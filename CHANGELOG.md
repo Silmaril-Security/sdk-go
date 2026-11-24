@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.9.0
+
+- Breaking: rename the tenant acceptable-use policy outcome to `abuse`.
+  `OutcomeAbuse` and `HarmfulOutcomeAbuse` replace the tenant-specific
+  constants, and `PrimaryOutcomes`, `HarmfulOutcomes`, and
+  `OutcomeDescriptions` list `abuse` in the same position. Responses that
+  still carry the previous label continue to decode as an open-ended outcome
+  string.
+
 ## v0.8.3
 
 - Match Python `str.strip()` when validating optional governance
@@ -135,8 +144,8 @@
 ## v0.5.1
 
 - Adds typed support for `code_generation`, `story_script_generation`,
-  `game_generation`, `website_generation`, `clickup_terms_violation`, and
-  `traditional_ai_abuse`.
+  `game_generation`, `website_generation`, `traditional_ai_abuse`, and the
+  tenant acceptable-use policy outcome now named `abuse`.
 - Extends ordered outcome collections, descriptions, validators, normalization
   fixtures, exports, and documentation without changing the `/classify` wire
   shape.

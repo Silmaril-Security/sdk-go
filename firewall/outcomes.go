@@ -26,7 +26,7 @@ const (
 	OutcomeStoryScriptGeneration PrimaryOutcome = "story_script_generation"
 	OutcomeGameGeneration        PrimaryOutcome = "game_generation"
 	OutcomeWebsiteGeneration     PrimaryOutcome = "website_generation"
-	OutcomeClickUpTermsViolation PrimaryOutcome = "clickup_terms_violation"
+	OutcomeAbuse                 PrimaryOutcome = "abuse"
 	OutcomeTraditionalAIAbuse    PrimaryOutcome = "traditional_ai_abuse"
 )
 
@@ -40,7 +40,7 @@ const (
 	HarmfulOutcomeStoryScriptGeneration HarmfulOutcome = "story_script_generation"
 	HarmfulOutcomeGameGeneration        HarmfulOutcome = "game_generation"
 	HarmfulOutcomeWebsiteGeneration     HarmfulOutcome = "website_generation"
-	HarmfulOutcomeClickUpTermsViolation HarmfulOutcome = "clickup_terms_violation"
+	HarmfulOutcomeAbuse                 HarmfulOutcome = "abuse"
 	HarmfulOutcomeTraditionalAIAbuse    HarmfulOutcome = "traditional_ai_abuse"
 )
 
@@ -55,7 +55,7 @@ var primaryOutcomes = []PrimaryOutcome{
 	OutcomeStoryScriptGeneration,
 	OutcomeGameGeneration,
 	OutcomeWebsiteGeneration,
-	OutcomeClickUpTermsViolation,
+	OutcomeAbuse,
 	OutcomeTraditionalAIAbuse,
 }
 
@@ -69,7 +69,7 @@ var harmfulOutcomes = []HarmfulOutcome{
 	HarmfulOutcomeStoryScriptGeneration,
 	HarmfulOutcomeGameGeneration,
 	HarmfulOutcomeWebsiteGeneration,
-	HarmfulOutcomeClickUpTermsViolation,
+	HarmfulOutcomeAbuse,
 	HarmfulOutcomeTraditionalAIAbuse,
 }
 
@@ -84,7 +84,7 @@ var outcomeDescriptions = map[PrimaryOutcome]string{
 	OutcomeStoryScriptGeneration: "Requests generation of narrative prose, dialogue, scripts, or story artifacts.",
 	OutcomeGameGeneration:        "Requests generation of a game, quest, level, mechanic, or playable experience.",
 	OutcomeWebsiteGeneration:     "Requests generation of a website, landing page, storefront, or web experience.",
-	OutcomeClickUpTermsViolation: "Requests content or actions that violate the configured ClickUp tenant policy.",
+	OutcomeAbuse:                 "Requests content or actions that violate the tenant's acceptable-use policy.",
 	OutcomeTraditionalAIAbuse:    "Requests unsafe AI assistance outside the concrete security outcome classes.",
 }
 
@@ -118,7 +118,7 @@ var primaryOutcomeSet = map[PrimaryOutcome]struct{}{
 	OutcomeStoryScriptGeneration: {},
 	OutcomeGameGeneration:        {},
 	OutcomeWebsiteGeneration:     {},
-	OutcomeClickUpTermsViolation: {},
+	OutcomeAbuse:                 {},
 	OutcomeTraditionalAIAbuse:    {},
 }
 
@@ -132,7 +132,7 @@ var harmfulOutcomeSet = map[HarmfulOutcome]struct{}{
 	HarmfulOutcomeStoryScriptGeneration: {},
 	HarmfulOutcomeGameGeneration:        {},
 	HarmfulOutcomeWebsiteGeneration:     {},
-	HarmfulOutcomeClickUpTermsViolation: {},
+	HarmfulOutcomeAbuse:                 {},
 	HarmfulOutcomeTraditionalAIAbuse:    {},
 }
 
