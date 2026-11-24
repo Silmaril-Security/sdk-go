@@ -43,10 +43,10 @@ This SDK is distributed as a Go module.
 go get github.com/Silmaril-Security/sdk-go/firewall@latest
 ```
 
-Pin v0.8.3 for reproducible installs:
+Pin v0.9.0 for reproducible installs:
 
 ```sh
-go get github.com/Silmaril-Security/sdk-go/firewall@v0.8.3
+go get github.com/Silmaril-Security/sdk-go/firewall@v0.9.0
 ```
 
 Use `@main` only when you intentionally want the current branch tip. Go resolves
@@ -304,7 +304,7 @@ if result.Prediction == firewall.PredictionBenign {
         firewall.OutcomeStoryScriptGeneration,
         firewall.OutcomeGameGeneration,
         firewall.OutcomeWebsiteGeneration,
-        firewall.OutcomeClickUpTermsViolation,
+        firewall.OutcomeAbuse,
         firewall.OutcomeTraditionalAIAbuse:
         applyTenantPolicy(result)
     default:
@@ -325,7 +325,7 @@ Outcome taxonomy:
 - `story_script_generation`: generation of narrative prose, dialogue, scripts, or story artifacts.
 - `game_generation`: generation of a game, quest, level, mechanic, or playable experience.
 - `website_generation`: generation of a website, landing page, storefront, or web experience.
-- `clickup_terms_violation`: content or actions that violate the configured ClickUp tenant policy.
+- `abuse`: content or actions that violate the tenant's acceptable-use policy.
 - `traditional_ai_abuse`: unsafe AI assistance outside the concrete security outcome classes.
 
 ## Backend Thresholding
@@ -667,6 +667,6 @@ IDs must be non-empty; MCP tools also require their canonical server parent ID.
 The compatibility metadata copy remains attribution only. Caller agent metadata
 does not supply an authenticated principal.
 
-For the v0.8.3 Go module, see the
-[package documentation](https://pkg.go.dev/github.com/Silmaril-Security/sdk-go@v0.8.3/firewall)
-and [GitHub release](https://github.com/Silmaril-Security/sdk-go/releases/tag/v0.8.3).
+For the v0.9.0 Go module, see the
+[package documentation](https://pkg.go.dev/github.com/Silmaril-Security/sdk-go@v0.9.0/firewall)
+and [GitHub release](https://github.com/Silmaril-Security/sdk-go/releases/tag/v0.9.0).
