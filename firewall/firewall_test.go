@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -16,16 +17,6 @@ import (
 	"testing"
 	"time"
 )
-
-// MarshalJSON makes legacy test fixtures model the backend response contract:
-// every successful classification includes its effective mode.
-func (r singleResponse) MarshalJSON() ([]byte, error) {
-	type responseAlias singleResponse
-	if r.Mode == "" {
-		r.Mode = ModeBlock
-	}
-	return json.Marshal(responseAlias(r))
-}
 
 func noJitter(delay time.Duration) time.Duration { return delay }
 
@@ -205,7 +196,17 @@ func TestClassifySingleHappyPath(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
 			t.Fatal(err)
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionMalicious, Score: 0.95, Threshold: 0.5, Mode: ModeShadow})
+		if r.URL.Path != classifyPath {
+			t.Errorf("path = %q, want %q", r.URL.Path, classifyPath)
+		}
+		writeResults(w, wireDecision{
+			Action:     "block",
+			Source:     ptr(SourceModel),
+			Confidence: ptr("high"),
+			Severity:   ptr("moderate"),
+			Outcome:    ptr("control_abuse"),
+			ModelID:    ptr(modelRelease),
+		})
 	}))
 	defer ts.Close()
 
@@ -221,11 +222,17 @@ func TestClassifySingleHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Prediction != PredictionMalicious || res.Score != 0.95 {
-		t.Errorf("result = %+v", res)
+	want := BlockResult{
+		Action:     ActionBlock,
+		Source:     SourceModel,
+		Confidence: ConfidenceHigh,
+		Severity:   SeverityModerate,
+		Outcome:    HarmfulOutcomeControlAbuse,
+		ModelID:    modelRelease,
+		Mode:       ModeShadow,
 	}
-	if res.Threshold != 0.5 {
-		t.Errorf("result threshold = %v, want 0.5", res.Threshold)
+	if !reflect.DeepEqual(res, want) {
+		t.Errorf("result = %+v, want %+v", res, want)
 	}
 	if gotPayload.Text != "hello" || gotPayload.Hook != HookUserInput || gotPayload.ToolName != "cal" {
 		t.Errorf("payload = %+v", gotPayload)
@@ -237,7 +244,7 @@ func TestClassifySanitizesInvalidUTF8Payload(t *testing.T) {
 	var gotPayload singleRequestPayload
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 
@@ -250,45 +257,11 @@ func TestClassifySanitizesInvalidUTF8Payload(t *testing.T) {
 	}
 }
 
-func TestClassifyDecodesOptionalSapphireFields(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(singleResponse{
-			Prediction:     PredictionMalicious,
-			Score:          0.91,
-			Threshold:      0.5,
-			Mode:           ModeShadow,
-			PrimaryOutcome: primaryOutcomePtr(string(OutcomeSecretExposure)),
-			OutcomeScores:  map[string]float64{string(OutcomeSecretExposure): 0.8},
-			DetectorScores: map[string]float64{string(OutcomeSecretExposure): 1.0},
-			DetectorCounts: map[string]int{string(OutcomeSecretExposure): 2},
-		})
-	}))
-	defer ts.Close()
-
-	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
-	res, err := fw.Classify(context.Background(), "leak token")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if res.PrimaryOutcome != OutcomeSecretExposure {
-		t.Errorf("primary outcome = %q", res.PrimaryOutcome)
-	}
-	if res.OutcomeScores[HarmfulOutcomeSecretExposure] != 0.8 {
-		t.Errorf("outcome scores = %+v", res.OutcomeScores)
-	}
-	if res.DetectorScores[HarmfulOutcomeSecretExposure] != 1.0 {
-		t.Errorf("detector scores = %+v", res.DetectorScores)
-	}
-	if res.DetectorCounts[HarmfulOutcomeSecretExposure] != 2 {
-		t.Errorf("detector counts = %+v", res.DetectorCounts)
-	}
-}
-
 func TestClassifyNoOptionsOmitsHookAndToolName(t *testing.T) {
 	var raw map[string]any
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&raw)
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 
@@ -319,7 +292,7 @@ func TestClassifySerializesMetadata(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
 			t.Fatal(err)
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 
@@ -348,11 +321,16 @@ func TestClassifyBatchHappyPath(t *testing.T) {
 	var gotPayload batchRequestPayload
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
-		_ = json.NewEncoder(w).Encode(batchResponse{
-			Predictions: []singleResponse{
-				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5, Mode: ModeShadow},
-				{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5, Mode: ModeShadow},
-			},
+		if r.URL.Path != classifyPath {
+			t.Errorf("path = %q, want %q", r.URL.Path, classifyPath)
+		}
+		writeResults(w, allowDecision, wireDecision{
+			Action:     "block",
+			Source:     ptr(SourceModel),
+			Confidence: ptr("very_high"),
+			Severity:   ptr("critical"),
+			Outcome:    ptr("system_compromise"),
+			ModelID:    ptr(modelRelease),
 		})
 	}))
 	defer ts.Close()
@@ -367,11 +345,20 @@ func TestClassifyBatchHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(results) != 2 {
-		t.Fatalf("got %d results, want 2", len(results))
+	want := []BlockResult{
+		{Action: ActionAllow, Mode: ModeShadow},
+		{
+			Action:     ActionBlock,
+			Source:     SourceModel,
+			Confidence: ConfidenceVeryHigh,
+			Severity:   SeverityCritical,
+			Outcome:    HarmfulOutcomeSystemCompromise,
+			ModelID:    modelRelease,
+			Mode:       ModeShadow,
+		},
 	}
-	if results[0].Prediction != PredictionBenign || results[1].Prediction != PredictionMalicious {
-		t.Errorf("results = %+v", results)
+	if !reflect.DeepEqual(results, want) {
+		t.Errorf("results = %+v, want %+v", results, want)
 	}
 	if len(gotPayload.Hooks) != 2 || gotPayload.Hooks[0] != HookUserInput || gotPayload.Hooks[1] != HookUserInput {
 		t.Errorf("hooks = %v", gotPayload.Hooks)
@@ -393,12 +380,7 @@ func TestClassifyBatchSerializesMetadata(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&gotPayload); err != nil {
 			t.Fatal(err)
 		}
-		_ = json.NewEncoder(w).Encode(batchResponse{
-			Predictions: []singleResponse{
-				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5},
-				{Prediction: PredictionBenign, Score: 0.2, Threshold: 0.5},
-			},
-		})
+		writeResults(w, allowDecision, allowDecision)
 	}))
 	defer ts.Close()
 
@@ -439,11 +421,11 @@ func TestClassifyBatchDoesNotSendThresholds(t *testing.T) {
 		}
 		received = append(received, payload)
 		rawPayloads = append(rawPayloads, raw)
-		predictions := make([]singleResponse, len(payload.Texts))
-		for i := range predictions {
-			predictions[i] = singleResponse{Prediction: PredictionBenign, Score: 0, Threshold: 0.5}
+		results := make([]wireDecision, len(payload.Texts))
+		for i := range results {
+			results[i] = allowDecision
 		}
-		_ = json.NewEncoder(w).Encode(batchResponse{Predictions: predictions})
+		writeResults(w, results...)
 	}))
 	defer ts.Close()
 
@@ -471,12 +453,7 @@ func TestClassifyBatchSanitizesInvalidUTF8Payload(t *testing.T) {
 	var gotPayload batchRequestPayload
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewDecoder(r.Body).Decode(&gotPayload)
-		_ = json.NewEncoder(w).Encode(batchResponse{
-			Predictions: []singleResponse{
-				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5},
-				{Prediction: PredictionBenign, Score: 0.2, Threshold: 0.5},
-			},
-		})
+		writeResults(w, allowDecision, allowDecision)
 	}))
 	defer ts.Close()
 
@@ -486,48 +463,6 @@ func TestClassifyBatchSanitizesInvalidUTF8Payload(t *testing.T) {
 	}
 	if len(gotPayload.Texts) != 2 || gotPayload.Texts[0] != "bad " || gotPayload.Texts[1] != "ok 😀" {
 		t.Fatalf("payload texts = %#v", gotPayload.Texts)
-	}
-}
-
-func TestClassifyBatchDecodesOptionalSapphireFields(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(batchResponse{
-			Predictions: []singleResponse{
-				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5, Mode: ModeShadow},
-				{
-					Prediction:     PredictionMalicious,
-					Score:          0.9,
-					Threshold:      0.5,
-					Mode:           ModeShadow,
-					PrimaryOutcome: primaryOutcomePtr(string(OutcomeSystemCompromise)),
-					OutcomeScores:  map[string]float64{string(OutcomeSystemCompromise): 0.92},
-					DetectorScores: map[string]float64{string(OutcomeInformationDisclosure): 0.85},
-					DetectorCounts: map[string]int{string(OutcomeInformationDisclosure): 1},
-				},
-			},
-		})
-	}))
-	defer ts.Close()
-
-	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
-	results, err := fw.ClassifyBatch(context.Background(), []string{"a", "b"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if results[0].PrimaryOutcome != "" || results[0].OutcomeScores != nil {
-		t.Errorf("unexpected Sapphire fields on binary result: %+v", results[0])
-	}
-	if results[1].PrimaryOutcome != OutcomeSystemCompromise {
-		t.Errorf("primary outcome = %q", results[1].PrimaryOutcome)
-	}
-	if results[1].OutcomeScores[HarmfulOutcomeSystemCompromise] != 0.92 {
-		t.Errorf("outcome scores = %+v", results[1].OutcomeScores)
-	}
-	if results[1].DetectorScores[HarmfulOutcomeInformationDisclosure] != 0.85 {
-		t.Errorf("detector scores = %+v", results[1].DetectorScores)
-	}
-	if results[1].DetectorCounts[HarmfulOutcomeInformationDisclosure] != 1 {
-		t.Errorf("detector counts = %+v", results[1].DetectorCounts)
 	}
 }
 
@@ -547,32 +482,161 @@ func TestClassifyBatchMismatchedHooks(t *testing.T) {
 	}
 }
 
-func TestClassifyTrustsServerPrediction(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.99, Threshold: 0.5})
-	}))
-	defer ts.Close()
+func TestClassifyEnforcesOnlyOnAction(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		item    wireDecision
+		want    BlockResult
+		blocked bool
+	}{
+		{name: "allow", item: allowDecision, want: BlockResult{Action: ActionAllow}},
+		{name: "block", item: blockDecision, want: BlockResult{Action: ActionBlock, Source: SourceModel}, blocked: true},
+		{
+			name:    "unfamiliar action",
+			item:    wireDecision{Action: "quarantine"},
+			want:    BlockResult{Action: ActionBlock},
+			blocked: true,
+		},
+		{
+			name:    "allow in another case",
+			item:    wireDecision{Action: "ALLOW"},
+			want:    BlockResult{Action: ActionBlock},
+			blocked: true,
+		},
+		{
+			name: "allow with unfamiliar evidence",
+			item: wireDecision{
+				Action:     "allow",
+				Source:     ptr("future_source"),
+				Confidence: ptr("certain"),
+				Severity:   ptr("catastrophic"),
+				Outcome:    ptr("data_exfiltration"),
+				ModelID:    ptr("future-model-release"),
+			},
+			want: BlockResult{
+				Action:     ActionAllow,
+				Source:     "future_source",
+				Confidence: "certain",
+				Severity:   "catastrophic",
+				Outcome:    "data_exfiltration",
+				ModelID:    "future-model-release",
+			},
+		},
+	} {
+		for _, batch := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/batch=%t", tc.name, batch), func(t *testing.T) {
+				ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					writeResults(w, tc.item)
+				}))
+				defer ts.Close()
 
-	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
-	result, err := fw.Classify(context.Background(), "server-side benign")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Prediction != PredictionBenign {
-		t.Errorf("prediction = %q, want BENIGN", result.Prediction)
+				var events []ClassifyEvent
+				fw, err := New(Options{
+					APIKey:     "sk",
+					APIURL:     ts.URL,
+					OnClassify: func(event ClassifyEvent) { events = append(events, event) },
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var result BlockResult
+				var enforced bool
+				if batch {
+					results, err := fw.ClassifyBatch(context.Background(), []string{"input"})
+					var blockedErr *BatchFirewallBlockedError
+					enforced = errors.As(err, &blockedErr)
+					if err != nil && !enforced {
+						t.Fatal(err)
+					}
+					result = results[0]
+				} else {
+					var blockedErr *FirewallBlockedError
+					result, err = fw.Classify(context.Background(), "input")
+					enforced = errors.As(err, &blockedErr)
+					if err != nil && !enforced {
+						t.Fatal(err)
+					}
+				}
+				if enforced != tc.blocked || len(events) != 1 || events[0].Blocked != tc.blocked {
+					t.Fatalf("enforced = %t, events = %+v, want blocked = %t", enforced, events, tc.blocked)
+				}
+				if !reflect.DeepEqual(result, tc.want) {
+					t.Fatalf("result = %+v, want %+v", result, tc.want)
+				}
+			})
+		}
 	}
 }
 
-func TestClassifyRequiresBackendPrediction(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(singleResponse{Score: 0.99, Threshold: 0.5})
-	}))
-	defer ts.Close()
+func TestClassifyRejectsMalformedDecisions(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{name: "null results", body: `{"results":null}`, want: "results length 0 does not match texts length 1"},
+		{name: "results is not an array", body: `{"results":{"action":"allow"}}`, want: "decode response"},
+		{name: "too many results", body: `{"results":[{"action":"allow"},{"action":"allow"}]}`, want: "results length 2 does not match texts length 1"},
+		{name: "missing action", body: `{"results":[{"source":null}]}`, want: "response action must be a non-empty string"},
+		{name: "null action", body: `{"results":[{"action":null}]}`, want: "response action must be a non-empty string"},
+		{name: "empty action", body: `{"results":[{"action":""}]}`, want: "response action must be a non-empty string"},
+		{name: "non-string action", body: `{"results":[{"action":1}]}`, want: "decode response"},
+		{name: "non-string model_id", body: `{"results":[{"action":"allow","model_id":16}]}`, want: "decode response"},
+	} {
+		for _, batch := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/batch=%t", tc.name, batch), func(t *testing.T) {
+				callbacks := 0
+				fw, err := New(Options{
+					APIKey: "sk",
+					APIURL: "https://firewall.test",
+					HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+						return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
+					})},
+					OnClassify: func(ClassifyEvent) { callbacks++ },
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if batch {
+					var results []BlockResult
+					results, err = fw.ClassifyBatch(context.Background(), []string{"input"})
+					if results != nil {
+						t.Fatalf("results = %#v, want nil", results)
+					}
+				} else {
+					var result BlockResult
+					result, err = fw.Classify(context.Background(), "input")
+					if !reflect.DeepEqual(result, BlockResult{}) {
+						t.Fatalf("result = %#v, want zero value", result)
+					}
+				}
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("error = %v, want %q", err, tc.want)
+				}
+				if callbacks != 0 {
+					t.Errorf("OnClassify ran %d times for a malformed response", callbacks)
+				}
+			})
+		}
+	}
+}
 
-	fw, _ := New(Options{APIKey: "sk", APIURL: ts.URL, ShadowMode: true})
-	_, err := fw.Classify(context.Background(), "missing prediction")
-	if err == nil || !strings.Contains(err.Error(), "invalid prediction") {
-		t.Fatalf("error = %v, want invalid prediction", err)
+func TestClassifyIgnoresUnknownFields(t *testing.T) {
+	body := `{"results":[{"action":"allow","source":null,"confidence":null,"severity":null,"outcome":null,"governance":null,"model_id":null,"mode":"shadow","score":0.9,"trace":{"id":"t-1"}}],"request_trace":"t-1"}`
+	fw, err := New(Options{
+		APIKey: "sk",
+		APIURL: "https://firewall.test",
+		HTTPClient: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body))}, nil
+		})},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := fw.Classify(context.Background(), "input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (BlockResult{Action: ActionAllow}); !reflect.DeepEqual(result, want) {
+		t.Fatalf("result = %+v, want %+v", result, want)
 	}
 }
 
@@ -583,7 +647,7 @@ func TestClassifyRetriesOn429(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 
@@ -594,7 +658,7 @@ func TestClassifyRetriesOn429(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Score != 0.1 {
+	if res.Action != ActionAllow {
 		t.Errorf("result = %+v", res)
 	}
 	if got := calls.Load(); got != 3 {
@@ -618,7 +682,7 @@ func TestClassifyDrainsRetryBody(t *testing.T) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader(`{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block"}`)),
+				Body:       io.NopCloser(strings.NewReader(allowBody)),
 				Request:    req,
 			}, nil
 		}),
@@ -668,7 +732,7 @@ func TestClassifyDoesNotFollowRedirects(t *testing.T) {
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		targetHit.Store(true)
 		leakedKey.Store(r.Header.Get("x-api-key"))
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
+		writeResults(w, allowDecision)
 	}))
 	defer target.Close()
 	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -773,7 +837,7 @@ func TestClassifyRetriesOnTransient5xx(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 
@@ -799,7 +863,7 @@ func TestClassifyRetriesNetworkErrors(t *testing.T) {
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     make(http.Header),
-				Body:       io.NopCloser(strings.NewReader(`{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block"}`)),
+				Body:       io.NopCloser(strings.NewReader(allowBody)),
 				Request:    req,
 			}, nil
 		}),
@@ -875,7 +939,7 @@ func TestClassifyHonorsRetryAfter(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 
@@ -953,13 +1017,11 @@ func TestClassifySendsLongInputOnce(t *testing.T) {
 		mu.Lock()
 		received = append(received, payload)
 		mu.Unlock()
-		score := 0.1
-		prediction := PredictionBenign
 		if callNumber == 2 {
-			score = 0.95
-			prediction = PredictionMalicious
+			writeResults(w, blockDecision)
+			return
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: prediction, Score: score, Threshold: 0.5})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 
@@ -969,7 +1031,7 @@ func TestClassifySendsLongInputOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Prediction != PredictionBenign || res.Score != 0.1 {
+	if res.Action != ActionAllow {
 		t.Errorf("result = %+v", res)
 	}
 	if len(received) != 1 {
@@ -999,7 +1061,7 @@ func TestClassifyLongInputPreservesToolAndMetadata(t *testing.T) {
 		mu.Lock()
 		received = append(received, payload)
 		mu.Unlock()
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 
@@ -1043,7 +1105,7 @@ func TestClassifyLongInputPropagatesChunkError(t *testing.T) {
 			http.Error(w, "boom", http.StatusBadRequest)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 
@@ -1077,7 +1139,7 @@ func TestClassifyLongInputUsesOneHTTPCall(t *testing.T) {
 		calls.Add(1)
 		time.Sleep(10 * time.Millisecond)
 		active.Add(-1)
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 

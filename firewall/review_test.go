@@ -105,7 +105,7 @@ func TestClassifyOmitsReviewByDefault(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 			t.Fatal(err)
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 
@@ -135,12 +135,7 @@ func TestClassifyExplicitReviewSingleAndBatch(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 					t.Fatal(err)
 				}
-				_ = json.NewEncoder(w).Encode(singleResponse{
-					Prediction: PredictionBenign,
-					Score:      0.1,
-					Threshold:  0.5,
-					Review:     reviewLevelPtr(review),
-				})
+				_ = json.NewEncoder(w).Encode(wireResponse{Review: review, Results: []wireDecision{allowDecision}})
 			}))
 			defer ts.Close()
 			fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
@@ -164,13 +159,7 @@ func TestClassifyExplicitReviewSingleAndBatch(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 					t.Fatal(err)
 				}
-				_ = json.NewEncoder(w).Encode(batchResponse{
-					Review: reviewLevelPtr(review),
-					Predictions: []singleResponse{
-						{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5},
-						{Prediction: PredictionBenign, Score: 0.2, Threshold: 0.5},
-					},
-				})
+				_ = json.NewEncoder(w).Encode(wireResponse{Review: review, Results: []wireDecision{allowDecision, allowDecision}})
 			}))
 			defer ts.Close()
 			fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
@@ -197,9 +186,7 @@ func TestClassifyReviewPerCallPrecedesClientDefault(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 			t.Fatal(err)
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{
-			Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5, Review: reviewLevelPtr(ReviewStandard),
-		})
+		_ = json.NewEncoder(w).Encode(wireResponse{Review: ReviewStandard, Results: []wireDecision{allowDecision}})
 	}))
 	defer ts.Close()
 
@@ -231,9 +218,7 @@ func TestClassifyReviewClientDefaultThenOmittedCall(t *testing.T) {
 		}
 		raws = append(raws, raw)
 		ack, _ := raw["review"].(string)
-		_ = json.NewEncoder(w).Encode(singleResponse{
-			Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5, Review: reviewLevelPtr(ReviewLevel(ack)),
-		})
+		_ = json.NewEncoder(w).Encode(wireResponse{Review: ack, Results: []wireDecision{allowDecision}})
 	}))
 	defer ts.Close()
 
@@ -267,12 +252,7 @@ func TestClassifyBatchReviewClientDefault(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
 			t.Fatal(err)
 		}
-		_ = json.NewEncoder(w).Encode(batchResponse{
-			Review: reviewLevelPtr(ReviewStandard),
-			Predictions: []singleResponse{
-				{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5},
-			},
-		})
+		_ = json.NewEncoder(w).Encode(wireResponse{Review: ReviewStandard, Results: []wireDecision{allowDecision}})
 	}))
 	defer ts.Close()
 	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL, Review: ReviewStandard})
@@ -297,10 +277,10 @@ func TestClassifyReviewAckMismatchAndMissingOneAttempt(t *testing.T) {
 		body string
 		got  ReviewLevel
 	}{
-		{name: "missing", body: `{"prediction":"MALICIOUS","score":0.99,"threshold":0.5}`},
-		{name: "null", body: `{"prediction":"MALICIOUS","score":0.99,"threshold":0.5,"review":null}`},
-		{name: "mismatch", body: `{"prediction":"MALICIOUS","score":0.99,"threshold":0.5,"review":"standard"}`, got: ReviewStandard},
-		{name: "metadata-only", body: `{"prediction":"MALICIOUS","score":0.99,"threshold":0.5,"metadata":{"review":"deep"}}`},
+		{name: "missing", body: `{"results":[` + blockItem + `]}`},
+		{name: "null", body: `{"results":[` + blockItem + `],"review":null}`},
+		{name: "mismatch", body: `{"results":[` + blockItem + `],"review":"standard"}`, got: ReviewStandard},
+		{name: "metadata-only", body: `{"results":[` + blockItem + `],"metadata":{"review":"deep"}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -347,14 +327,14 @@ func TestClassifyReviewAckMismatchAndMissingOneAttempt(t *testing.T) {
 	}
 }
 
-func TestClassifyBatchReviewAckUsesEnvelopeNotPredictions(t *testing.T) {
+func TestClassifyBatchReviewAckUsesEnvelopeNotResults(t *testing.T) {
 	var calls atomic.Int32
 	var callback atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		_, _ = io.WriteString(w, `{
-			"predictions": [
-				{"prediction":"MALICIOUS","score":0.99,"threshold":0.5,"review":"deep"}
+			"results": [
+				{"action":"block","source":"model","confidence":null,"severity":null,"outcome":null,"governance":null,"model_id":null,"review":"deep"}
 			]
 		}`)
 	}))
@@ -404,12 +384,7 @@ func TestClassifyMatchingReviewAckPreservesBlockEnforcement(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				_ = json.NewEncoder(w).Encode(singleResponse{
-					Prediction: PredictionMalicious,
-					Score:      0.91,
-					Threshold:  0.5,
-					Review:     reviewLevelPtr(review),
-				})
+				_ = json.NewEncoder(w).Encode(wireResponse{Review: review, Results: []wireDecision{blockDecision}})
 			}))
 			defer ts.Close()
 
@@ -443,10 +418,10 @@ func TestClassifyMatchingReviewAckPreservesBlockEnforcement(t *testing.T) {
 			if payload.Review == nil || *payload.Review != review {
 				t.Fatalf("request review = %#v, want %q", payload.Review, review)
 			}
-			if result.Review != review || result.Prediction != PredictionMalicious || result.Score != 0.91 {
+			if result.Review != review || result.Action != ActionBlock {
 				t.Fatalf("returned result = %+v", result)
 			}
-			if blocked.Result.Review != review || blocked.Result.Prediction != PredictionMalicious || blocked.Result.Score != 0.91 {
+			if blocked.Result != result {
 				t.Fatalf("blocked.Result = %+v", blocked.Result)
 			}
 			if blocked.PromptText != "attack" || blocked.Hook != HookUserInput {
@@ -470,13 +445,7 @@ func TestClassifyMatchingReviewAckPreservesBlockEnforcement(t *testing.T) {
 					t.Error(err)
 					return
 				}
-				_ = json.NewEncoder(w).Encode(batchResponse{
-					Review: reviewLevelPtr(review),
-					Predictions: []singleResponse{
-						{Prediction: PredictionBenign, Score: 0.12, Threshold: 0.5},
-						{Prediction: PredictionMalicious, Score: 0.88, Threshold: 0.5},
-					},
-				})
+				_ = json.NewEncoder(w).Encode(wireResponse{Review: review, Results: []wireDecision{allowDecision, blockDecision}})
 			}))
 			defer ts.Close()
 
@@ -514,30 +483,30 @@ func TestClassifyMatchingReviewAckPreservesBlockEnforcement(t *testing.T) {
 			if len(results) != 2 {
 				t.Fatalf("results = %d, want 2", len(results))
 			}
-			if results[0].Review != review || results[0].Prediction != PredictionBenign || results[0].Score != 0.12 {
-				t.Fatalf("benign result = %+v", results[0])
+			if results[0].Review != review || results[0].Action != ActionAllow {
+				t.Fatalf("allowed result = %+v", results[0])
 			}
-			if results[1].Review != review || results[1].Prediction != PredictionMalicious || results[1].Score != 0.88 {
-				t.Fatalf("malicious result = %+v", results[1])
+			if results[1].Review != review || results[1].Action != ActionBlock {
+				t.Fatalf("blocked result = %+v", results[1])
 			}
 			if len(blocked.Blocked) != 1 {
-				t.Fatalf("blocked items = %d, want 1 malicious item", len(blocked.Blocked))
+				t.Fatalf("blocked items = %d, want 1 blocked item", len(blocked.Blocked))
 			}
 			item := blocked.Blocked[0]
 			if item.Index != 1 || item.Text != "attack" || item.Hook != HookToolResponse {
 				t.Fatalf("blocked item = %+v", item)
 			}
-			if item.Result.Review != review || item.Result.Prediction != PredictionMalicious || item.Result.Score != 0.88 {
+			if item.Result != results[1] {
 				t.Fatalf("blocked item result = %+v", item.Result)
 			}
 			if len(events) != 2 {
 				t.Fatalf("events = %d, want 2", len(events))
 			}
 			if events[0].Blocked || events[0].Text != "safe" || events[0].Result.Review != review {
-				t.Fatalf("benign event = %+v", events[0])
+				t.Fatalf("allowed event = %+v", events[0])
 			}
 			if !events[1].Blocked || events[1].Mode != ModeBlock || events[1].Text != "attack" || events[1].Result.Review != review {
-				t.Fatalf("malicious event = %+v", events[1])
+				t.Fatalf("blocked event = %+v", events[1])
 			}
 		})
 	}
@@ -556,9 +525,7 @@ func TestClassifyRetriesPreserveReview(t *testing.T) {
 			w.WriteHeader(http.StatusTooManyRequests)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(singleResponse{
-			Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5, Review: reviewLevelPtr(ReviewStandard),
-		})
+		_ = json.NewEncoder(w).Encode(wireResponse{Review: ReviewStandard, Results: []wireDecision{allowDecision}})
 	}))
 	defer ts.Close()
 
@@ -605,12 +572,7 @@ func TestClassifyConcurrentMixedReviewIsolation(t *testing.T) {
 		mu.Lock()
 		got = append(got, captured{text: raw["text"].(string), review: review, ok: ok})
 		mu.Unlock()
-		resp := singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5}
-		if ok {
-			level := ReviewLevel(review.(string))
-			resp.Review = &level
-		}
-		_ = json.NewEncoder(w).Encode(resp)
+		_ = json.NewEncoder(w).Encode(wireResponse{Review: review, Results: []wireDecision{allowDecision}})
 	}))
 	defer ts.Close()
 
@@ -706,11 +668,7 @@ func assertWrongTypeReviewAck(t *testing.T, batch bool, reviewJSON string) {
 		calls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		if batch {
-			_, _ = io.WriteString(w, `{"predictions":[{"prediction":"MALICIOUS","score":0.99,"threshold":0.5}],"review":`+reviewJSON+`}`)
-			return
-		}
-		_, _ = io.WriteString(w, `{"prediction":"MALICIOUS","score":0.99,"threshold":0.5,"review":`+reviewJSON+`}`)
+		_, _ = io.WriteString(w, `{"results":[`+blockItem+`],"review":`+reviewJSON+`}`)
 	}))
 	defer ts.Close()
 
@@ -761,7 +719,7 @@ func TestClassifyOmittedIgnoresUnknownReviewType(t *testing.T) {
 		t.Run("single/"+reviewJSON, func(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, `{"prediction":"BENIGN","score":0.1,"threshold":0.5,"review":`+reviewJSON+`}`)
+				_, _ = io.WriteString(w, `{"results":[`+allowItem+`],"review":`+reviewJSON+`}`)
 			}))
 			defer ts.Close()
 			fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
@@ -779,7 +737,7 @@ func TestClassifyOmittedIgnoresUnknownReviewType(t *testing.T) {
 		t.Run("batch/"+reviewJSON, func(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, `{"predictions":[{"prediction":"BENIGN","score":0.1,"threshold":0.5,"review":`+reviewJSON+`}],"review":`+reviewJSON+`}`)
+				_, _ = io.WriteString(w, `{"results":[{"action":"allow","review":`+reviewJSON+`}],"review":`+reviewJSON+`}`)
 			}))
 			defer ts.Close()
 			fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
@@ -799,9 +757,7 @@ func TestClassifyOmittedIgnoresUnknownReviewType(t *testing.T) {
 
 func TestClassifyOmittedIgnoresUnexpectedReviewEcho(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(singleResponse{
-			Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5, Review: reviewLevelPtr(ReviewDeep),
-		})
+		_ = json.NewEncoder(w).Encode(wireResponse{Review: ReviewDeep, Results: []wireDecision{allowDecision}})
 	}))
 	defer ts.Close()
 	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})

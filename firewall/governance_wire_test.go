@@ -21,11 +21,11 @@ func TestTypedResourcePolicyAndAttributionBoundary(t *testing.T) {
 		if _, ok := body["agent"]; ok {
 			t.Error("caller agent became request identity")
 		}
-		action := "allow"
+		item := wireDecision{Action: "allow", Governance: &GovernanceDecision{Action: GovernanceAllow, PolicyVersion: "fixture"}}
 		if resource, ok := body["resource"].(map[string]any); ok && resource["kind"] == "plugin" && resource["id"] == "blocked-plugin" {
-			action = "block"
+			item = wireDecision{Action: "block", Source: ptr(SourceGovernance), Governance: &GovernanceDecision{Action: GovernanceBlock, PolicyVersion: "fixture"}}
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"prediction": "BENIGN", "score": 0.1, "threshold": 0.5, "governance": map[string]string{"action": action, "policy_version": "fixture"}})
+		writeResults(w, item)
 	}))
 	defer server.Close()
 	fw, err := New(Options{APIKey: "sk-test", APIURL: server.URL})
@@ -72,7 +72,7 @@ func TestRequestResourceValidationBeforeTransport(t *testing.T) {
 
 func TestResponseResourceValidation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"prediction":"BENIGN","score":0.1,"threshold":0.5,"governance":{"action":"allow","policy_version":"schema6","resource":{"kind":"mcp_tool","id":"search"}}}`))
+		_, _ = w.Write([]byte(`{"results":[{"action":"allow","source":null,"confidence":null,"severity":null,"outcome":null,"governance":{"action":"allow","policy_version":"schema6","resource":{"kind":"mcp_tool","id":"search"}},"model_id":null}]}`))
 	}))
 	defer server.Close()
 	fw, err := New(Options{APIKey: "sk-test", APIURL: server.URL})
@@ -82,6 +82,29 @@ func TestResponseResourceValidation(t *testing.T) {
 	if _, err := fw.Classify(context.Background(), "synthetic"); err == nil {
 		t.Fatal("response accepted an invalid canonical governance resource")
 	}
+}
+
+func version2GovernanceBody(governance string) string {
+	return `{"results":[{"action":"allow","governance":` + governance + `}]}`
+}
+
+func version1GovernanceBody(governance string) string {
+	return `{"prediction":"BENIGN","score":0.1,"threshold":0.5,"governance":` + governance + `}`
+}
+
+func version1BatchGovernanceBody(governance string) string {
+	return `{"predictions":[` + version1GovernanceBody(governance) + `]}`
+}
+
+var governanceWireShapes = []struct {
+	name  string
+	batch bool
+	body  func(governance string) string
+}{
+	{name: "v2/single", body: version2GovernanceBody},
+	{name: "v2/batch", batch: true, body: version2GovernanceBody},
+	{name: "v1/single", body: version1GovernanceBody},
+	{name: "v1/batch", batch: true, body: version1BatchGovernanceBody},
 }
 
 func TestGovernanceOptionalStringWireValidation(t *testing.T) {
@@ -115,17 +138,10 @@ func TestGovernanceOptionalStringWireValidation(t *testing.T) {
 		{name: "Python-blank reason", fields: `,"reason":"\u001c\u0085\u00a0\u2007\u2029\u3000"`, errorContains: "governance reason must be null, omitted, or a non-blank string"},
 		{name: "boolean reason", fields: `,"reason":true`, errorContains: "cannot unmarshal bool"},
 	} {
-		for _, batch := range []bool{false, true} {
-			shape := "single"
-			if batch {
-				shape = "batch"
-			}
-			t.Run(tc.name+"/"+shape, func(t *testing.T) {
-				decision := `{"action":"allow","policy_version":"schema6","rule_id":"rule-1"` + tc.fields + `}`
-				body := `{"prediction":"BENIGN","score":0.1,"threshold":0.5,"governance":` + decision + `}`
-				if batch {
-					body = `{"predictions":[` + body + `]}`
-				}
+		for _, shape := range governanceWireShapes {
+			t.Run(tc.name+"/"+shape.name, func(t *testing.T) {
+				batch := shape.batch
+				body := shape.body(`{"action":"allow","policy_version":"schema6","rule_id":"rule-1"` + tc.fields + `}`)
 				fw, err := New(Options{
 					APIKey: "sk-test",
 					APIURL: "https://firewall.test/classify",
@@ -180,16 +196,10 @@ func TestResponseNonMCPParentIDMustBeNullOrOmitted(t *testing.T) {
 		{name: "empty string", parentID: `,"parent_id":""`, wantErr: "parent_id must be null or omitted for non-mcp_tool"},
 		{name: "numeric", parentID: `,"parent_id":7`, wantErr: "cannot unmarshal number"},
 	} {
-		for _, batch := range []bool{false, true} {
-			shape := "single"
-			if batch {
-				shape = "batch"
-			}
-			t.Run(tc.name+"/"+shape, func(t *testing.T) {
-				body := `{"prediction":"BENIGN","score":0.1,"threshold":0.5,"governance":{"action":"allow","policy_version":"schema6","resource":{"kind":"plugin","id":"plugin-1"` + tc.parentID + `}}}`
-				if batch {
-					body = `{"predictions":[` + body + `]}`
-				}
+		for _, shape := range governanceWireShapes {
+			t.Run(tc.name+"/"+shape.name, func(t *testing.T) {
+				batch := shape.batch
+				body := shape.body(`{"action":"allow","policy_version":"schema6","resource":{"kind":"plugin","id":"plugin-1"` + tc.parentID + `}}`)
 				fw, err := New(Options{
 					APIKey: "sk-test",
 					APIURL: "https://firewall.test/classify",
@@ -255,8 +265,7 @@ func TestNullableBatchResourceOrder(t *testing.T) {
 		if len(resources) != 3 || resources[0] != nil || resources[2] != nil || resources[1].(map[string]any)["id"] != "blocked-plugin" {
 			t.Errorf("wrong alignment: %#v", resources)
 		}
-		verdict := singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5}
-		_ = json.NewEncoder(w).Encode(batchResponse{Predictions: []singleResponse{verdict, verdict, verdict}})
+		writeResults(w, allowDecision, allowDecision, allowDecision)
 	}))
 	defer server.Close()
 	fw, err := New(Options{APIKey: "sk-test", APIURL: server.URL})

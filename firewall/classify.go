@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 )
 
 type singleRequestPayload struct {
@@ -30,125 +31,145 @@ type batchRequestPayload struct {
 	Review    *ReviewLevel              `json:"review,omitempty"`
 }
 
-type singleResponse struct {
-	Prediction     Prediction          `json:"prediction"`
-	Score          float64             `json:"score"`
-	Threshold      float64             `json:"threshold"`
-	Mode           FirewallMode        `json:"mode"`
-	PrimaryOutcome *string             `json:"primary_outcome"`
-	OutcomeScores  outcomeScoreMap     `json:"outcome_scores"`
-	DetectorScores detectorScoreMap    `json:"detector_scores"`
-	DetectorCounts detectorCountMap    `json:"detector_counts"`
-	Governance     *GovernanceDecision `json:"governance"`
-	// Review stays loosely typed. Explicit selections require an exact string
-	// acknowledgement; any other JSON value is a compatibility error. Omitted
-	// selections ignore the field, including unexpected types.
-	Review any `json:"review,omitempty"`
+type classifyResponse struct {
+	current *decisionResponse
+	legacy  legacyResponse
 }
 
-// UnmarshalJSON distinguishes absent or null diagnostics from valid zero
-// values and validates response-only governance wire constraints without
-// changing the public governance types.
-func (r *singleResponse) UnmarshalJSON(data []byte) error {
-	type responseFields singleResponse
-	var wire struct {
-		responseFields
-		Score      json.RawMessage `json:"score"`
-		Threshold  json.RawMessage `json:"threshold"`
-		Governance json.RawMessage `json:"governance"`
+// UnmarshalJSON reads a body with a results key as version 2 and any other
+// body as version 1, whichever path returned it.
+func (r *classifyResponse) UnmarshalJSON(data []byte) error {
+	var shape struct {
+		Results json.RawMessage `json:"results"`
 	}
-	if err := json.Unmarshal(data, &wire); err != nil {
+	if err := json.Unmarshal(data, &shape); err != nil {
 		return err
 	}
-	governance, err := decodeResponseGovernance(wire.Governance)
-	if err != nil {
-		return err
+	if shape.Results == nil {
+		return json.Unmarshal(data, &r.legacy)
 	}
-	score, err := decodeVerdictNumber("score", wire.Score)
-	if err != nil {
-		return err
-	}
-	threshold, err := decodeVerdictNumber("threshold", wire.Threshold)
-	if err != nil {
-		return err
-	}
-	*r = singleResponse(wire.responseFields)
-	r.Score = score
-	r.Threshold = threshold
-	r.Governance = governance
-	return nil
+	r.current = &decisionResponse{}
+	return json.Unmarshal(data, r.current)
 }
 
-type responseGovernanceDecision struct {
-	Action           GovernanceAction            `json:"action"`
-	PolicyVersion    string                      `json:"policy_version"`
-	RuleID           string                      `json:"rule_id,omitempty"`
-	Resource         *responseGovernanceResource `json:"resource"`
-	IdentityRevision *string                     `json:"identity_revision"`
-	Reason           *string                     `json:"reason"`
+func (r classifyResponse) decisions(batch bool) (decisionResponse, error) {
+	if r.current != nil {
+		return *r.current, nil
+	}
+	return r.legacy.decisions(batch)
 }
 
-type responseGovernanceResource struct {
-	Kind     GovernanceResourceKind `json:"kind"`
-	ID       string                 `json:"id,omitempty"`
-	ParentID *string                `json:"parent_id"`
+type decisionResponse struct {
+	Results []decision `json:"results"`
+	Review  any        `json:"review"`
 }
 
-func decodeResponseGovernance(encoded json.RawMessage) (*GovernanceDecision, error) {
-	if len(encoded) == 0 {
-		return nil, nil
+type decision struct {
+	Action     Action              `json:"action"`
+	Source     string              `json:"source"`
+	Confidence Confidence          `json:"confidence"`
+	Severity   Severity            `json:"severity"`
+	Outcome    HarmfulOutcome      `json:"outcome"`
+	Governance *responseGovernance `json:"governance"`
+	ModelID    string              `json:"model_id"`
+	mode       FirewallMode
+}
+
+// responseGovernance decodes a returned governance decision and rejects
+// evidence the public type cannot distinguish from absent: a blank
+// identity_revision or reason, and an empty parent_id outside mcp_tool.
+type responseGovernance GovernanceDecision
+
+func (g *responseGovernance) UnmarshalJSON(data []byte) error {
+	var evidence struct {
+		IdentityRevision *string `json:"identity_revision"`
+		Reason           *string `json:"reason"`
+		Resource         *struct {
+			Kind     GovernanceResourceKind `json:"kind"`
+			ParentID *string                `json:"parent_id"`
+		} `json:"resource"`
 	}
-	var wire *responseGovernanceDecision
-	if err := json.Unmarshal(encoded, &wire); err != nil {
-		return nil, err
+	if err := json.Unmarshal(data, &evidence); err != nil {
+		return err
 	}
-	if wire == nil {
-		return nil, nil
+	if evidence.IdentityRevision != nil && isPythonBlank(*evidence.IdentityRevision) {
+		return errors.New("firewall: response governance identity_revision must be null, omitted, or a non-blank string")
 	}
-	if wire.IdentityRevision != nil && isPythonBlank(*wire.IdentityRevision) {
-		return nil, fmt.Errorf("firewall: response governance identity_revision must be null, omitted, or a non-blank string")
+	if evidence.Reason != nil && isPythonBlank(*evidence.Reason) {
+		return errors.New("firewall: response governance reason must be null, omitted, or a non-blank string")
 	}
-	if wire.Reason != nil && isPythonBlank(*wire.Reason) {
-		return nil, fmt.Errorf("firewall: response governance reason must be null, omitted, or a non-blank string")
+	if resource := evidence.Resource; resource != nil && resource.Kind != GovernanceMCPTool && resource.ParentID != nil && *resource.ParentID == "" {
+		return errors.New("firewall: response governance resource parent_id must be null or omitted for non-mcp_tool")
 	}
-	decision := &GovernanceDecision{
-		Action:        wire.Action,
-		PolicyVersion: wire.PolicyVersion,
-		RuleID:        wire.RuleID,
+	return json.Unmarshal(data, (*GovernanceDecision)(g))
+}
+
+func isPythonBlank(value string) bool {
+	return strings.TrimFunc(value, func(r rune) bool {
+		return unicode.IsSpace(r) || r >= '\u001c' && r <= '\u001f'
+	}) == ""
+}
+
+const (
+	legacyBenign    = "BENIGN"
+	legacyMalicious = "MALICIOUS"
+)
+
+type legacyResponse struct {
+	legacyVerdict
+	Predictions []legacyVerdict `json:"predictions"`
+	Review      any             `json:"review"`
+}
+
+type legacyVerdict struct {
+	Prediction      string                     `json:"prediction"`
+	ModelPrediction string                     `json:"model_prediction"`
+	Mode            FirewallMode               `json:"mode"`
+	PrimaryOutcome  HarmfulOutcome             `json:"primary_outcome"`
+	OutcomeScores   map[string]json.RawMessage `json:"outcome_scores"`
+	Governance      *responseGovernance        `json:"governance"`
+	ModelID         string                     `json:"model_id"`
+}
+
+func (r legacyResponse) decisions(batch bool) (decisionResponse, error) {
+	verdicts := []legacyVerdict{r.legacyVerdict}
+	if batch {
+		verdicts = r.Predictions
 	}
-	if wire.IdentityRevision != nil {
-		decision.IdentityRevision = *wire.IdentityRevision
-	}
-	if wire.Reason != nil {
-		decision.Reason = *wire.Reason
-	}
-	if wire.Resource != nil {
-		resource := &GovernanceResource{
-			Kind: wire.Resource.Kind,
-			ID:   wire.Resource.ID,
+	adapted := decisionResponse{Results: make([]decision, len(verdicts)), Review: r.Review}
+	for i, verdict := range verdicts {
+		result, err := verdict.adapted()
+		if err != nil {
+			return decisionResponse{}, err
 		}
-		if wire.Resource.ParentID != nil {
-			resource.ParentID = *wire.Resource.ParentID
-			if resource.Kind != GovernanceMCPTool && resource.ParentID == "" {
-				return nil, fmt.Errorf("firewall: response governance resource parent_id must be null or omitted for non-mcp_tool")
-			}
+		adapted.Results[i] = result
+	}
+	return adapted, nil
+}
+
+func (v legacyVerdict) adapted() (decision, error) {
+	if v.Prediction != legacyBenign && v.Prediction != legacyMalicious {
+		return decision{}, fmt.Errorf("firewall: invalid prediction %q", v.Prediction)
+	}
+	if validateMode(v.Mode) != nil {
+		return decision{}, fmt.Errorf("firewall: invalid backend mode %q", v.Mode)
+	}
+	adapted := decision{Action: ActionAllow, Governance: v.Governance, ModelID: v.ModelID, mode: v.Mode}
+	if v.Prediction != legacyMalicious && (v.Governance == nil || v.Governance.Action != GovernanceBlock) {
+		return adapted, nil
+	}
+	adapted.Action, adapted.Source = ActionBlock, SourceGovernance
+	modelLabel := v.ModelPrediction
+	if modelLabel == "" {
+		modelLabel = v.Prediction
+	}
+	if modelLabel == legacyMalicious {
+		adapted.Source = SourceModel
+		if len(v.OutcomeScores) > 0 {
+			adapted.Outcome = v.PrimaryOutcome
 		}
-		decision.Resource = resource
 	}
-	return decision, nil
-}
-
-func decodeVerdictNumber(field string, encoded json.RawMessage) (float64, error) {
-	var value *float64
-	if err := json.Unmarshal(encoded, &value); err != nil || value == nil || *value < 0 || *value > 1 {
-		return 0, fmt.Errorf("firewall: response %s must be a number between 0 and 1", field)
-	}
-	return *value, nil
-}
-
-type batchResponse struct {
-	Predictions []singleResponse `json:"predictions"`
-	Review      any              `json:"review,omitempty"`
+	return adapted, nil
 }
 
 // Classify classifies one complete logical event in a single request.
@@ -246,21 +267,32 @@ func (f *Firewall) classifySingleRaw(ctx context.Context, text string, cfg class
 		payload.ToolName = cfg.toolName
 	}
 	payload.Review = cfg.review
-	var resp singleResponse
-	if err := f.postJSON(ctx, payload, &resp); err != nil {
-		return BlockResult{}, err
-	}
-	if err := verifyReviewAcknowledgement(cfg.review, resp.Review); err != nil {
-		return BlockResult{}, err
-	}
-	result, err := blockResultFromResponse(resp, payload.Mode)
+	results, err := f.decide(ctx, payload, false, 1, payload.Mode, cfg.review)
 	if err != nil {
 		return BlockResult{}, err
 	}
-	if cfg.review != nil {
-		result.Review = *cfg.review
+	return results[0], nil
+}
+
+func blockResults(resp decisionResponse, inputs int, requestedMode FirewallMode, review *ReviewLevel) ([]BlockResult, error) {
+	if err := verifyReviewAcknowledgement(review, resp.Review); err != nil {
+		return nil, err
 	}
-	return result, nil
+	if len(resp.Results) != inputs {
+		return nil, fmt.Errorf("firewall: results length %d does not match texts length %d", len(resp.Results), inputs)
+	}
+	results := make([]BlockResult, inputs)
+	for i, item := range resp.Results {
+		result, err := blockResultFromDecision(item, requestedMode)
+		if err != nil {
+			return nil, err
+		}
+		if review != nil {
+			result.Review = *review
+		}
+		results[i] = result
+	}
+	return results, nil
 }
 
 // ClassifyBatch classifies multiple independent texts in a single request.
@@ -352,28 +384,7 @@ func (f *Firewall) classifyBatchRaw(ctx context.Context, texts []string, cfg bat
 			payload.Resources[i] = resource
 		}
 	}
-	var resp batchResponse
-	if err := f.postJSON(ctx, payload, &resp); err != nil {
-		return nil, err
-	}
-	if err := verifyReviewAcknowledgement(cfg.review, resp.Review); err != nil {
-		return nil, err
-	}
-	if len(resp.Predictions) != len(texts) {
-		return nil, fmt.Errorf("firewall: predictions length %d does not match texts length %d", len(resp.Predictions), len(texts))
-	}
-	results := make([]BlockResult, len(resp.Predictions))
-	for i, p := range resp.Predictions {
-		result, err := blockResultFromResponse(p, payload.Mode)
-		if err != nil {
-			return nil, err
-		}
-		if cfg.review != nil {
-			result.Review = *cfg.review
-		}
-		results[i] = result
-	}
-	return results, nil
+	return f.decide(ctx, payload, true, len(texts), payload.Mode, cfg.review)
 }
 
 func (f *Firewall) newClassifyEvent(text string, hook HookLabel, toolName string, result BlockResult) ClassifyEvent {
@@ -391,7 +402,7 @@ func (f *Firewall) newClassifyEvent(text string, hook HookLabel, toolName string
 		ToolName:   toolName,
 		Text:       text,
 		Result:     result,
-		Blocked:    result.Prediction == PredictionMalicious || (result.Governance != nil && result.Governance.Action == GovernanceBlock),
+		Blocked:    result.Action != ActionAllow,
 		Mode:       effectiveMode,
 		ShadowMode: effectiveMode == ModeShadow,
 	}
@@ -480,8 +491,6 @@ func safeClassifyCallback(fn func(ClassifyEvent), event ClassifyEvent) {
 
 func firewallBlockedErrorFromEvent(event ClassifyEvent) *FirewallBlockedError {
 	return &FirewallBlockedError{
-		Score:      event.Result.Score,
-		Threshold:  event.Result.Threshold,
 		PromptText: event.Text,
 		Hook:       event.Hook,
 		ToolName:   event.ToolName,
@@ -553,66 +562,42 @@ func batchMetadata(cfg batchClassifyConfig, length int) ([]*ClassificationMetada
 	return out, nil
 }
 
-func blockResultFromResponse(resp singleResponse, requestedMode ...FirewallMode) (BlockResult, error) {
-	switch resp.Prediction {
-	case PredictionBenign, PredictionMalicious:
-	default:
-		return BlockResult{}, fmt.Errorf("firewall: invalid prediction %q", resp.Prediction)
+func blockResultFromDecision(item decision, requestedMode FirewallMode) (BlockResult, error) {
+	if item.Action == "" {
+		return BlockResult{}, errors.New("firewall: response action must be a non-empty string")
 	}
-	if resp.Mode != "" {
-		if err := validateMode(resp.Mode); err != nil {
-			return BlockResult{}, fmt.Errorf("firewall: invalid backend mode %q", resp.Mode)
-		}
-	}
-	if resp.Governance != nil {
-		if resp.Governance.Action != GovernanceAllow && resp.Governance.Action != GovernanceBlock {
+	if item.Governance != nil {
+		if item.Governance.Action != GovernanceAllow && item.Governance.Action != GovernanceBlock {
 			return BlockResult{}, fmt.Errorf("firewall: response governance action must be allow or block")
 		}
-		if resp.Governance.PolicyVersion == "" {
+		if item.Governance.PolicyVersion == "" {
 			return BlockResult{}, fmt.Errorf("firewall: response governance policy_version must be non-empty")
 		}
-		if resp.Governance.Resource != nil {
-			if err := validateGovernanceResource(*resp.Governance.Resource); err != nil {
+		if item.Governance.Resource != nil {
+			if err := validateGovernanceResource(*item.Governance.Resource); err != nil {
 				return BlockResult{}, fmt.Errorf("firewall: response %w", err)
 			}
 		}
 	}
-	mode := resp.Mode
-	if len(requestedMode) > 0 && requestedMode[0] != "" {
+	action := ActionBlock
+	if item.Action == ActionAllow {
+		action = ActionAllow
+	}
+	mode := item.mode
+	if requestedMode != "" {
 		// A supplied mode is the per-request override contract. Prefer it
 		// during rolling upgrades so a missing or stale response field cannot
 		// strengthen enforcement beyond what the caller requested.
-		mode = requestedMode[0]
-	}
-	var primary PrimaryOutcome
-	if resp.PrimaryOutcome != nil {
-		normalized, err := normalizePrimaryOutcome(*resp.PrimaryOutcome, "primary_outcome")
-		if err != nil {
-			return BlockResult{}, err
-		}
-		primary = normalized
-	}
-	outcomeScores, err := normalizeHarmfulOutcomeFloatMap(map[string]float64(resp.OutcomeScores), "outcome_scores")
-	if err != nil {
-		return BlockResult{}, err
-	}
-	detectorScores, err := normalizeHarmfulOutcomeFloatMap(map[string]float64(resp.DetectorScores), "detector_scores")
-	if err != nil {
-		return BlockResult{}, err
-	}
-	detectorCounts, err := normalizeHarmfulOutcomeIntMap(map[string]int(resp.DetectorCounts), "detector_counts")
-	if err != nil {
-		return BlockResult{}, err
+		mode = requestedMode
 	}
 	return BlockResult{
-		Prediction:     resp.Prediction,
-		Score:          resp.Score,
-		Threshold:      resp.Threshold,
-		Mode:           mode,
-		PrimaryOutcome: primary,
-		OutcomeScores:  outcomeScores,
-		DetectorScores: detectorScores,
-		DetectorCounts: detectorCounts,
-		Governance:     resp.Governance,
+		Action:     action,
+		Source:     item.Source,
+		Confidence: item.Confidence,
+		Severity:   item.Severity,
+		Outcome:    item.Outcome,
+		Governance: (*GovernanceDecision)(item.Governance),
+		ModelID:    item.ModelID,
+		Mode:       mode,
 	}, nil
 }

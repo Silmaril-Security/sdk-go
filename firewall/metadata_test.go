@@ -30,9 +30,7 @@ func TestClassifyPreservesTypedSilmarilMetadata(t *testing.T) {
 			if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
 				return nil, err
 			}
-			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(
-				`{"prediction":"BENIGN","score":0.1,"threshold":0.5}`,
-			))}, nil
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(allowBody))}, nil
 		})},
 	})
 	if err != nil {
@@ -60,9 +58,7 @@ func TestClassifyBatchPreservesNamedSilmarilMetadata(t *testing.T) {
 			if err := decoder.Decode(&request); err != nil {
 				return nil, err
 			}
-			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(
-				`{"predictions":[{"prediction":"BENIGN","score":0.1,"threshold":0.5}]}`,
-			))}, nil
+			return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(allowBody))}, nil
 		})},
 	})
 	if err != nil {

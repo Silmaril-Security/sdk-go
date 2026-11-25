@@ -1,5 +1,77 @@
 # Changelog
 
+## v1.0.0
+
+The SDK now speaks version 2 of the classify contract. This is a breaking
+release for code that reads the result; no configuration changes are needed.
+
+- Call `POST /v2/classify`, which returns one decision per input. `APIURL` is
+  unchanged: the SDK removes a trailing slash and a final `/v2/classify` or
+  `/classify` path, keeps the query string, and appends `/v2/classify`. `New`
+  now rejects an `APIURL` that does not parse.
+- Work against runtimes without `/v2/classify`. When that endpoint answers
+  HTTP 403, 404, or 405, the SDK sends the same request to `/classify`, adapts
+  the response, and remembers a successful fallback for the life of the
+  client. Adapted results carry the same `Action`, `Source`, `Outcome`,
+  `Governance`, `ModelID`, and `Review`, with empty evidence in `Confidence`
+  and `Severity`. An adapted result blocks exactly when 0.x did, on a
+  `MALICIOUS` `prediction` or a governance block, so it never allows what
+  `/classify` blocked. The retry policy for 408, 429, and 5xx responses is
+  unchanged.
+- Adapt a successful response without a `results` key as a `/classify` body
+  whichever path returned it, so an intermediary that routes `/v2/classify` to
+  the `/classify` handler still yields decisions; the SDK keeps calling
+  `/v2/classify`.
+- `BlockResult` carries `Action`, `Source`, `Confidence`, `Severity`,
+  `Outcome`, `Governance`, `ModelID`, `Review`, and `Mode`. `Action`,
+  `Confidence`, and `Severity` are typed strings with constants. `Source` is
+  an open string, with `SourceModel` and `SourceGovernance` naming the current
+  sources.
+  `Outcome` is a `HarmfulOutcome`, an open type whose zero value means the
+  result has no outcome.
+- `BlockResult.ModelID` is the identifier of the model release that classified
+  the item, for provenance; it never affects enforcement.
+- Enforce on `Action` alone. `Action` is always `ActionAllow` or
+  `ActionBlock`: the SDK reports any wire value other than `allow` as
+  `ActionBlock`, so `Action == ActionBlock` never misses a block. Unfamiliar
+  `Source`, `Confidence`, `Severity`, and `Outcome` values are returned as
+  given, and unknown response fields are ignored.
+- Reject a response whose `results` do not match the inputs one to one, or
+  whose result has a missing or non-string `action`, before returning results
+  or invoking callbacks.
+- Validate returned governance evidence as v0.8.3 does on both versions: a
+  present `identity_revision` or `reason` must be nonblank, and a resource
+  other than an MCP tool may not return `parent_id` as an empty string.
+- Remove `Prediction`, `Score`, `Threshold`, `PrimaryOutcome`,
+  `OutcomeScores`, `DetectorScores`, and `DetectorCounts` from `BlockResult`,
+  the `Prediction` type and its constants, and `Score` and `Threshold` from
+  `FirewallBlockedError`. Blocking error strings no longer include a score.
+- Remove the `PrimaryOutcome` type, its `Outcome*` constants including
+  `OutcomeBenign`, `PrimaryOutcomes`, and `IsPrimaryOutcome`: an outcome now
+  exists only on a model block, so there is no benign label.
+  `OutcomeDescriptions` is keyed by `HarmfulOutcome` and has no benign entry.
+  `HarmfulOutcome`, its constants, `HarmfulOutcomes`, and `IsHarmfulOutcome`
+  are unchanged.
+
+Migration:
+
+| 0.x | 1.0.0 |
+|---|---|
+| `Prediction` (`PredictionBenign`, `PredictionMalicious`) | `Action` (`ActionAllow`, `ActionBlock`) |
+| `PrimaryOutcome` field, `PrimaryOutcome` type, `Outcome*` constants | `Outcome` field, `HarmfulOutcome` type, `HarmfulOutcome*` constants |
+| `OutcomeBenign` | empty `Outcome` |
+| `PrimaryOutcomes()`, `IsPrimaryOutcome()` | `HarmfulOutcomes()`, `IsHarmfulOutcome()` |
+| `Score`, `Threshold` | `Confidence`, `Severity` |
+| wire `predictions` | wire `results` |
+
+`Confidence` and `Severity` are not a renamed score. They describe the
+Firewall's assessment of the item and are set only when that assessment is the
+reason for the block; they are empty on an allow, on a block that came from a
+governance policy, and on a block the Firewall reached without that
+assessment. The module path
+stays `github.com/Silmaril-Security/sdk-go`, because this is the module's
+first v1 release. SDK 0.x keeps working against `/classify`, which is frozen.
+
 ## v0.9.0
 
 - Breaking: rename the tenant acceptable-use policy outcome to `abuse`.

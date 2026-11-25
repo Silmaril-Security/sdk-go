@@ -34,8 +34,6 @@ func (e *APIError) Error() string {
 // FirewallBlockedError is returned by Classify when a classified request is
 // blocked by the Firewall and shadow mode is not enabled.
 type FirewallBlockedError struct {
-	Score      float64
-	Threshold  float64
 	PromptText string
 	Hook       HookLabel
 	ToolName   string
@@ -43,7 +41,7 @@ type FirewallBlockedError struct {
 }
 
 func (e *FirewallBlockedError) Error() string {
-	return fmt.Sprintf("firewall: request blocked (score=%.4f, threshold=%.4f)", e.Score, e.Threshold)
+	return "firewall: request blocked"
 }
 
 // PromptBlockedError is the old name for FirewallBlockedError.
@@ -68,13 +66,7 @@ type BatchFirewallBlockedError struct {
 
 func (e *BatchFirewallBlockedError) Error() string {
 	if len(e.Blocked) == 1 {
-		item := e.Blocked[0]
-		return fmt.Sprintf(
-			"firewall: batch request blocked at index %d (score=%.4f, threshold=%.4f)",
-			item.Index,
-			item.Result.Score,
-			item.Result.Threshold,
-		)
+		return fmt.Sprintf("firewall: batch request blocked at index %d", e.Blocked[0].Index)
 	}
 	return fmt.Sprintf("firewall: batch requests blocked (%d items)", len(e.Blocked))
 }

@@ -2,33 +2,12 @@
 
 package firewall
 
-import (
-	"fmt"
-	"math"
-	"strings"
-	"unicode"
-)
+import "maps"
 
-// PrimaryOutcome is the canonical outcome label for a classification result.
-type PrimaryOutcome string
-
-// HarmfulOutcome is a canonical non-benign outcome label.
+// HarmfulOutcome is the harm the Firewall predicts for a model block. The type
+// is open: a runtime may return a label outside the constants below, and the
+// zero value means the result has no outcome.
 type HarmfulOutcome string
-
-const (
-	OutcomeBenign                PrimaryOutcome = "benign"
-	OutcomeInformationDisclosure PrimaryOutcome = "information_disclosure"
-	OutcomeSecretExposure        PrimaryOutcome = "secret_exposure"
-	OutcomeControlAbuse          PrimaryOutcome = "control_abuse"
-	OutcomeSystemCompromise      PrimaryOutcome = "system_compromise"
-	OutcomeServiceDisruption     PrimaryOutcome = "service_disruption"
-	OutcomeCodeGeneration        PrimaryOutcome = "code_generation"
-	OutcomeStoryScriptGeneration PrimaryOutcome = "story_script_generation"
-	OutcomeGameGeneration        PrimaryOutcome = "game_generation"
-	OutcomeWebsiteGeneration     PrimaryOutcome = "website_generation"
-	OutcomeAbuse                 PrimaryOutcome = "abuse"
-	OutcomeTraditionalAIAbuse    PrimaryOutcome = "traditional_ai_abuse"
-)
 
 const (
 	HarmfulOutcomeInformationDisclosure HarmfulOutcome = "information_disclosure"
@@ -44,21 +23,6 @@ const (
 	HarmfulOutcomeTraditionalAIAbuse    HarmfulOutcome = "traditional_ai_abuse"
 )
 
-var primaryOutcomes = []PrimaryOutcome{
-	OutcomeBenign,
-	OutcomeInformationDisclosure,
-	OutcomeSecretExposure,
-	OutcomeControlAbuse,
-	OutcomeSystemCompromise,
-	OutcomeServiceDisruption,
-	OutcomeCodeGeneration,
-	OutcomeStoryScriptGeneration,
-	OutcomeGameGeneration,
-	OutcomeWebsiteGeneration,
-	OutcomeAbuse,
-	OutcomeTraditionalAIAbuse,
-}
-
 var harmfulOutcomes = []HarmfulOutcome{
 	HarmfulOutcomeInformationDisclosure,
 	HarmfulOutcomeSecretExposure,
@@ -73,24 +37,18 @@ var harmfulOutcomes = []HarmfulOutcome{
 	HarmfulOutcomeTraditionalAIAbuse,
 }
 
-var outcomeDescriptions = map[PrimaryOutcome]string{
-	OutcomeBenign:                "No harmful firewall outcome detected.",
-	OutcomeInformationDisclosure: "Exposes private data, documents, internal context, logs, traces, customer data, SQL rows, topology, or similar non-secret sensitive information.",
-	OutcomeSecretExposure:        "Exposes credentials, tokens, API keys, cookies, passwords, signing keys, OAuth secrets, session material, or webhook secrets.",
-	OutcomeControlAbuse:          "Misuses authorized tools or user privileges to send, change, approve, delete, operate, or bypass policy/RBAC without a stronger outcome.",
-	OutcomeSystemCompromise:      "Enables privilege escalation, account takeover, hostile integration or plugin takeover, persistence, lateral movement, attacker webhook registration, or code/plugin execution.",
-	OutcomeServiceDisruption:     "Causes downtime, lockout, degradation, alert suppression, destructive loops, resource exhaustion, cost spikes, or hidden outage evidence.",
-	OutcomeCodeGeneration:        "Requests generation or material modification of executable code, scripts, workflows, or configuration.",
-	OutcomeStoryScriptGeneration: "Requests generation of narrative prose, dialogue, scripts, or story artifacts.",
-	OutcomeGameGeneration:        "Requests generation of a game, quest, level, mechanic, or playable experience.",
-	OutcomeWebsiteGeneration:     "Requests generation of a website, landing page, storefront, or web experience.",
-	OutcomeAbuse:                 "Requests content or actions that violate the tenant's acceptable-use policy.",
-	OutcomeTraditionalAIAbuse:    "Requests unsafe AI assistance outside the concrete security outcome classes.",
-}
-
-// PrimaryOutcomes returns the ordered public primary-outcome taxonomy.
-func PrimaryOutcomes() []PrimaryOutcome {
-	return append([]PrimaryOutcome(nil), primaryOutcomes...)
+var outcomeDescriptions = map[HarmfulOutcome]string{
+	HarmfulOutcomeInformationDisclosure: "Exposes private data, documents, internal context, logs, traces, customer data, SQL rows, topology, or similar non-secret sensitive information.",
+	HarmfulOutcomeSecretExposure:        "Exposes credentials, tokens, API keys, cookies, passwords, signing keys, OAuth secrets, session material, or webhook secrets.",
+	HarmfulOutcomeControlAbuse:          "Misuses authorized tools or user privileges to send, change, approve, delete, operate, or bypass policy/RBAC without a stronger outcome.",
+	HarmfulOutcomeSystemCompromise:      "Enables privilege escalation, account takeover, hostile integration or plugin takeover, persistence, lateral movement, attacker webhook registration, or code/plugin execution.",
+	HarmfulOutcomeServiceDisruption:     "Causes downtime, lockout, degradation, alert suppression, destructive loops, resource exhaustion, cost spikes, or hidden outage evidence.",
+	HarmfulOutcomeCodeGeneration:        "Requests generation or material modification of executable code, scripts, workflows, or configuration.",
+	HarmfulOutcomeStoryScriptGeneration: "Requests generation of narrative prose, dialogue, scripts, or story artifacts.",
+	HarmfulOutcomeGameGeneration:        "Requests generation of a game, quest, level, mechanic, or playable experience.",
+	HarmfulOutcomeWebsiteGeneration:     "Requests generation of a website, landing page, storefront, or web experience.",
+	HarmfulOutcomeAbuse:                 "Requests content or actions that violate the tenant's acceptable-use policy.",
+	HarmfulOutcomeTraditionalAIAbuse:    "Requests unsafe AI assistance outside the concrete security outcome classes.",
 }
 
 // HarmfulOutcomes returns the ordered public harmful-outcome taxonomy.
@@ -99,107 +57,12 @@ func HarmfulOutcomes() []HarmfulOutcome {
 }
 
 // OutcomeDescriptions returns short public descriptions for each known outcome.
-func OutcomeDescriptions() map[PrimaryOutcome]string {
-	out := make(map[PrimaryOutcome]string, len(outcomeDescriptions))
-	for key, value := range outcomeDescriptions {
-		out[key] = value
-	}
-	return out
-}
-
-var primaryOutcomeSet = map[PrimaryOutcome]struct{}{
-	OutcomeBenign:                {},
-	OutcomeInformationDisclosure: {},
-	OutcomeSecretExposure:        {},
-	OutcomeControlAbuse:          {},
-	OutcomeSystemCompromise:      {},
-	OutcomeServiceDisruption:     {},
-	OutcomeCodeGeneration:        {},
-	OutcomeStoryScriptGeneration: {},
-	OutcomeGameGeneration:        {},
-	OutcomeWebsiteGeneration:     {},
-	OutcomeAbuse:                 {},
-	OutcomeTraditionalAIAbuse:    {},
-}
-
-var harmfulOutcomeSet = map[HarmfulOutcome]struct{}{
-	HarmfulOutcomeInformationDisclosure: {},
-	HarmfulOutcomeSecretExposure:        {},
-	HarmfulOutcomeControlAbuse:          {},
-	HarmfulOutcomeSystemCompromise:      {},
-	HarmfulOutcomeServiceDisruption:     {},
-	HarmfulOutcomeCodeGeneration:        {},
-	HarmfulOutcomeStoryScriptGeneration: {},
-	HarmfulOutcomeGameGeneration:        {},
-	HarmfulOutcomeWebsiteGeneration:     {},
-	HarmfulOutcomeAbuse:                 {},
-	HarmfulOutcomeTraditionalAIAbuse:    {},
-}
-
-// IsPrimaryOutcome reports whether value is a canonical primary outcome.
-func IsPrimaryOutcome(value PrimaryOutcome) bool {
-	_, ok := primaryOutcomeSet[value]
-	return ok
+func OutcomeDescriptions() map[HarmfulOutcome]string {
+	return maps.Clone(outcomeDescriptions)
 }
 
 // IsHarmfulOutcome reports whether value is a canonical harmful outcome.
 func IsHarmfulOutcome(value HarmfulOutcome) bool {
-	_, ok := harmfulOutcomeSet[value]
-	return ok
-}
-
-func isPythonBlank(value string) bool {
-	return strings.TrimFunc(value, func(r rune) bool {
-		return unicode.IsSpace(r) || r >= '\u001c' && r <= '\u001f'
-	}) == ""
-}
-
-func normalizePrimaryOutcome(value string, fieldName string) (PrimaryOutcome, error) {
-	if isPythonBlank(value) {
-		return "", fmt.Errorf("firewall: invalid %s %q", fieldName, value)
-	}
-	return PrimaryOutcome(value), nil
-}
-
-func normalizeHarmfulOutcome(value string, fieldName string) (HarmfulOutcome, error) {
-	if isPythonBlank(value) || value == string(OutcomeBenign) {
-		return "", fmt.Errorf("firewall: invalid %s %q", fieldName, value)
-	}
-	return HarmfulOutcome(value), nil
-}
-
-func normalizeHarmfulOutcomeFloatMap(values map[string]float64, fieldName string) (map[HarmfulOutcome]float64, error) {
-	if values == nil {
-		return nil, nil
-	}
-	out := make(map[HarmfulOutcome]float64, len(values))
-	for key, value := range values {
-		outcome, err := normalizeHarmfulOutcome(key, fieldName+" key")
-		if err != nil {
-			return nil, err
-		}
-		if math.IsNaN(value) || value < 0 || value > 1 {
-			return nil, fmt.Errorf("firewall: %s value for %q must be a number between 0 and 1", fieldName, key)
-		}
-		out[outcome] = value
-	}
-	return out, nil
-}
-
-func normalizeHarmfulOutcomeIntMap(values map[string]int, fieldName string) (map[HarmfulOutcome]int, error) {
-	if values == nil {
-		return nil, nil
-	}
-	out := make(map[HarmfulOutcome]int, len(values))
-	for key, value := range values {
-		outcome, err := normalizeHarmfulOutcome(key, fieldName+" key")
-		if err != nil {
-			return nil, err
-		}
-		if value < 0 {
-			return nil, fmt.Errorf("firewall: %s value for %q must be non-negative, got %d", fieldName, key, value)
-		}
-		out[outcome] = value
-	}
-	return out, nil
+	_, known := outcomeDescriptions[value]
+	return known
 }

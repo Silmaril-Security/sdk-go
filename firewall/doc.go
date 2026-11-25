@@ -2,10 +2,12 @@
 
 // Package firewall provides the Silmaril Firewall Go client.
 //
-// The client calls a Silmaril /classify endpoint to evaluate user input, tool
-// calls, tool responses, model output, or system prompt content before an AI
-// application continues execution. Classify and ClassifyBatch enforce backend
-// blocking decisions by default and return FirewallBlockedError or
+// The client calls a Silmaril /v2/classify endpoint to evaluate user input,
+// tool calls, tool responses, model output, or system prompt content before an
+// AI application continues execution, and falls back to /classify on runtimes
+// that predate it. Each BlockResult carries one Action; any value other than
+// ActionAllow is a block. Classify and ClassifyBatch enforce blocking
+// decisions by default and return FirewallBlockedError or
 // BatchFirewallBlockedError when the Firewall blocks a request. Enable shadow
 // mode to observe decisions without interrupting traffic. Protect runs a
 // caller's operation while its input is classified and withholds the result of

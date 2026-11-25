@@ -67,11 +67,11 @@ func newHeldServer(t *testing.T) *heldServer {
 			w.WriteHeader(held.status)
 			return
 		}
-		response := singleResponse{Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5}
 		if strings.Contains(payload.Text, "attack") {
-			response = singleResponse{Prediction: PredictionMalicious, Score: 0.9, Threshold: 0.5}
+			writeResults(w, blockDecision)
+			return
 		}
-		_ = json.NewEncoder(w).Encode(response)
+		writeResults(w, allowDecision)
 	}))
 	t.Cleanup(held.Close)
 	t.Cleanup(held.releaseAll)

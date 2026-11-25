@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestGovernanceSingleAndLegacy(t *testing.T) {
+func TestGovernanceSingleDecisions(t *testing.T) {
 	var sent []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
@@ -19,11 +19,11 @@ func TestGovernanceSingleAndLegacy(t *testing.T) {
 		sent = append(sent, body)
 		switch len(sent) {
 		case 1:
-			_, _ = w.Write([]byte(`{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block","governance":{"action":"block","policy_version":"schema6","rule_id":"rule-1","resource":{"kind":"mcp_tool","id":"search","parent_id":"server-1"},"identity_revision":"identity-r7","reason":"identity_unresolved"}}`))
+			_, _ = w.Write([]byte(`{"results":[{"action":"block","source":"governance","confidence":null,"severity":null,"outcome":null,"governance":{"action":"block","policy_version":"schema6","rule_id":"rule-1","resource":{"kind":"mcp_tool","id":"search","parent_id":"server-1"},"identity_revision":"identity-r7","reason":"identity_unresolved"},"model_id":null}]}`))
 		case 2:
-			_, _ = w.Write([]byte(`{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block","governance":{"action":"allow","policy_version":"schema6","resource":null,"identity_revision":null,"reason":null}}`))
+			_, _ = w.Write([]byte(`{"results":[{"action":"allow","source":null,"confidence":null,"severity":null,"outcome":null,"governance":{"action":"allow","policy_version":"schema6","resource":null,"identity_revision":null,"reason":null},"model_id":null}]}`))
 		default:
-			_, _ = w.Write([]byte(`{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block"}`))
+			_, _ = w.Write([]byte(allowBody))
 		}
 	}))
 	defer server.Close()
@@ -34,7 +34,7 @@ func TestGovernanceSingleAndLegacy(t *testing.T) {
 	resource := GovernanceContext{Agent: "agent-1", Resource: &GovernanceResource{Kind: GovernanceMCPTool, ID: "search", ParentID: "server-1"}}
 	result, err := fw.Classify(context.Background(), "search", WithGovernance(resource))
 	var blocked *FirewallBlockedError
-	if !errors.As(err, &blocked) || result.Governance == nil || result.Governance.RuleID != "rule-1" {
+	if !errors.As(err, &blocked) || result.Source != SourceGovernance || result.Governance == nil || result.Governance.RuleID != "rule-1" {
 		t.Fatalf("result=%+v error=%v", result, err)
 	}
 	decision := result.Governance
@@ -59,9 +59,9 @@ func TestGovernanceSingleAndLegacy(t *testing.T) {
 	if err != nil || nullable.Governance == nil || nullable.Governance.Resource != nil || nullable.Governance.IdentityRevision != "" || nullable.Governance.Reason != "" {
 		t.Fatalf("nullable result=%+v error=%v", nullable, err)
 	}
-	legacy, err := fw.Classify(context.Background(), "legacy-safe")
-	if err != nil || legacy.Governance != nil {
-		t.Fatalf("legacy result=%+v error=%v", legacy, err)
+	ungoverned, err := fw.Classify(context.Background(), "ungoverned-safe")
+	if err != nil || ungoverned.Governance != nil {
+		t.Fatalf("ungoverned result=%+v error=%v", ungoverned, err)
 	}
 }
 
@@ -81,7 +81,7 @@ func TestGovernanceBatchWireAndLength(t *testing.T) {
 		if first["governance"] == nil || second["governance"] != nil {
 			t.Errorf("metadata=%#v", metadata)
 		}
-		_, _ = w.Write([]byte(`{"predictions":[{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"warn","governance":{"action":"block","policy_version":"schema6","rule_id":"rule-future","resource":{"kind":"plugin","id":"plugin-future"},"identity_revision":"identity-r8","reason":"future_runtime_reason"}},{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"warn"}]}`))
+		_, _ = w.Write([]byte(`{"results":[{"action":"block","source":"governance","confidence":null,"severity":null,"outcome":null,"governance":{"action":"block","policy_version":"schema6","rule_id":"rule-future","resource":{"kind":"plugin","id":"plugin-future"},"identity_revision":"identity-r8","reason":"future_runtime_reason"},"model_id":null},{"action":"allow","source":null,"confidence":null,"severity":null,"outcome":null,"governance":null,"model_id":null}]}`))
 	}))
 	defer server.Close()
 	fw, err := New(Options{APIKey: "sk", APIURL: server.URL})
@@ -89,7 +89,7 @@ func TestGovernanceBatchWireAndLength(t *testing.T) {
 		t.Fatal(err)
 	}
 	contexts := []*GovernanceContext{{Agent: "a"}, nil}
-	results, err := fw.ClassifyBatch(context.Background(), []string{"a", "b"}, WithBatchGovernance(contexts))
+	results, err := fw.ClassifyBatch(context.Background(), []string{"a", "b"}, WithBatchGovernance(contexts), WithBatchMode(ModeWarn))
 	if err != nil || len(results) != 2 || results[0].Governance == nil || results[1].Governance != nil {
 		t.Fatalf("results=%+v error=%v", results, err)
 	}
@@ -102,9 +102,9 @@ func TestGovernanceBatchWireAndLength(t *testing.T) {
 	}
 }
 
-func TestGovernanceBatchBlockModeIncludesBenignPolicyDenial(t *testing.T) {
+func TestGovernanceBatchBlockModeIncludesPolicyDenial(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{"predictions":[{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block","governance":{"action":"block","policy_version":"v2","rule_id":"policy-1"}},{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block"}]}`))
+		_, _ = w.Write([]byte(`{"results":[{"action":"block","source":"governance","confidence":null,"severity":null,"outcome":null,"governance":{"action":"block","policy_version":"v2","rule_id":"policy-1"},"model_id":null},{"action":"allow","source":null,"confidence":null,"severity":null,"outcome":null,"governance":null,"model_id":null}]}`))
 	}))
 	defer server.Close()
 
@@ -120,7 +120,8 @@ func TestGovernanceBatchBlockModeIncludesBenignPolicyDenial(t *testing.T) {
 	if len(results) != 2 || len(blocked.Blocked) != 1 || blocked.Blocked[0].Index != 0 {
 		t.Fatalf("results=%+v blocked=%+v", results, blocked.Blocked)
 	}
-	if decision := blocked.Blocked[0].Result.Governance; decision == nil || decision.Action != GovernanceBlock || decision.RuleID != "policy-1" {
-		t.Fatalf("blocked decision=%+v", decision)
+	denied := blocked.Blocked[0].Result
+	if denied.Source != SourceGovernance || denied.Governance == nil || denied.Governance.Action != GovernanceBlock || denied.Governance.RuleID != "policy-1" {
+		t.Fatalf("blocked result=%+v", denied)
 	}
 }
