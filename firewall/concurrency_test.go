@@ -31,13 +31,9 @@ func TestClassifyOverlappingCallsCompleteOutOfOrder(t *testing.T) {
 		case "slow":
 			close(slowStarted)
 			<-releaseSlow
-			_ = json.NewEncoder(w).Encode(singleResponse{
-				Prediction: PredictionMalicious, Score: 0.91, Threshold: 0.5, Mode: ModeShadow,
-			})
+			writeResults(w, blockDecision)
 		case "fast":
-			_ = json.NewEncoder(w).Encode(singleResponse{
-				Prediction: PredictionBenign, Score: 0.12, Threshold: 0.5, Mode: ModeShadow,
-			})
+			writeResults(w, allowDecision)
 		default:
 			t.Errorf("unexpected text %q", payload.Text)
 		}
@@ -83,7 +79,7 @@ func TestClassifyOverlappingCallsCompleteOutOfOrder(t *testing.T) {
 	if first.label != "fast" {
 		t.Fatalf("first completion = %s, want fast while slow remains blocked", first.label)
 	}
-	if first.res.Prediction != PredictionBenign || first.res.Score != 0.12 {
+	if first.res.Action != ActionAllow {
 		t.Errorf("fast result = %+v", first.res)
 	}
 
@@ -100,7 +96,7 @@ func TestClassifyOverlappingCallsCompleteOutOfOrder(t *testing.T) {
 	if second.label != "slow" {
 		t.Fatalf("second completion = %s, want slow", second.label)
 	}
-	if second.res.Prediction != PredictionMalicious || second.res.Score != 0.91 {
+	if second.res.Action != ActionBlock {
 		t.Errorf("slow result = %+v", second.res)
 	}
 }
@@ -138,9 +134,7 @@ func TestClassifyConcurrentMetadataAndRequestIDIsolation(t *testing.T) {
 		mu.Lock()
 		got = append(got, captured{text: payload.Text, requestID: requestID, runID: runID})
 		mu.Unlock()
-		_ = json.NewEncoder(w).Encode(singleResponse{
-			Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5,
-		})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 
@@ -240,20 +234,16 @@ func TestClassifyBatchConcurrentPreservesItemOrder(t *testing.T) {
 		mu.Unlock()
 		started <- struct{}{}
 		<-hold
-		predictions := make([]singleResponse, len(payload.Texts))
+		results := make([]wireDecision, len(payload.Texts))
 		for i, text := range payload.Texts {
-			score := 0.1
-			if len(text) > 0 {
-				score = float64(text[len(text)-1]-'0') / 10
-			}
-			predictions[i] = singleResponse{Prediction: PredictionBenign, Score: score, Threshold: 0.5}
+			results[i] = wireDecision{Action: "block", Source: ptr(SourceModel), Outcome: ptr(text)}
 		}
-		_ = json.NewEncoder(w).Encode(batchResponse{Predictions: predictions})
+		writeResults(w, results...)
 	}))
 	defer ts.Close()
 	defer release()
 
-	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL})
+	fw, err := New(Options{APIKey: "sk", APIURL: ts.URL, Mode: ModeShadow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,12 +294,12 @@ func TestClassifyBatchConcurrentPreservesItemOrder(t *testing.T) {
 		switch out.id {
 		case "batch-a":
 			gotA = true
-			if len(out.results) != 2 || out.results[0].Score != 0.1 || out.results[1].Score != 0.2 {
+			if len(out.results) != 2 || out.results[0].Outcome != "a1" || out.results[1].Outcome != "a2" {
 				t.Fatalf("batch-a results = %+v", out.results)
 			}
 		case "batch-b":
 			gotB = true
-			if len(out.results) != 3 || out.results[0].Score != 0.3 || out.results[1].Score != 0.4 || out.results[2].Score != 0.5 {
+			if len(out.results) != 3 || out.results[0].Outcome != "b3" || out.results[1].Outcome != "b4" || out.results[2].Outcome != "b5" {
 				t.Fatalf("batch-b results = %+v", out.results)
 			}
 		}
@@ -366,9 +356,7 @@ func TestClassifyCancelDuringHTTPDoesNotAffectSibling(t *testing.T) {
 			return
 		}
 		<-holdSibling
-		_ = json.NewEncoder(w).Encode(singleResponse{
-			Prediction: PredictionBenign, Score: 0.1, Threshold: 0.5,
-		})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 	defer releaseSibling()
@@ -427,7 +415,7 @@ func TestClassifyCancelDuringHTTPDoesNotAffectSibling(t *testing.T) {
 		t.Fatal("sibling call did not return")
 	}
 	res := <-siblingRes
-	if res.Prediction != PredictionBenign {
+	if res.Action != ActionAllow {
 		t.Errorf("sibling result = %+v", res)
 	}
 }
@@ -449,9 +437,7 @@ func TestClassifyCancelDuringRetrySleepDoesNotAffectSibling(t *testing.T) {
 			return
 		}
 		<-holdSibling
-		_ = json.NewEncoder(w).Encode(singleResponse{
-			Prediction: PredictionBenign, Score: 0.22, Threshold: 0.5,
-		})
+		writeResults(w, allowDecision)
 	}))
 	defer ts.Close()
 	defer releaseSibling()
@@ -516,7 +502,7 @@ func TestClassifyCancelDuringRetrySleepDoesNotAffectSibling(t *testing.T) {
 		t.Fatal("sibling call did not return")
 	}
 	res := <-siblingRes
-	if res.Score != 0.22 {
+	if res.Action != ActionAllow {
 		t.Errorf("sibling result = %+v", res)
 	}
 }

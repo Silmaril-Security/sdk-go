@@ -23,12 +23,12 @@ func main() {
 	must(err)
 	must(json.Unmarshal(data, &scenario))
 	run := os.Getenv("CUSTOMER_RUN_ID")
-	var prediction fw.Prediction
+	var action fw.Action
 	client, err := fw.New(fw.Options{
 		APIKey:     os.Getenv("SILMARIL_API_KEY"),
 		APIURL:     os.Getenv("SILMARIL_API_URL"),
 		Mode:       fw.ModeBlock,
-		OnClassify: func(event fw.ClassifyEvent) { prediction = event.Result.Prediction },
+		OnClassify: func(event fw.ClassifyEvent) { action = event.Result.Action },
 	})
 	must(err)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
@@ -51,7 +51,7 @@ func main() {
 			must(os.WriteFile(path, []byte(summary), 0600))
 		}
 		_, stat := os.Stat(path)
-		rows = append(rows, map[string]any{"id": item.ID, "request_id": id, "prediction": prediction, "blocked": blocked, "wrote_summary": stat == nil})
+		rows = append(rows, map[string]any{"id": item.ID, "request_id": id, "action": action, "blocked": blocked, "wrote_summary": stat == nil})
 	}
 	data, err = json.Marshal(map[string]any{"run_id": run, "cases": rows})
 	must(err)

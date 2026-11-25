@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
@@ -16,7 +17,10 @@ const (
 	defaultMaxQueued     = 64
 )
 
-// Firewall is a client for the Silmaril Firewall /classify endpoint.
+// Firewall is a client for the Silmaril Firewall classify endpoints. It calls
+// /v2/classify and, when the runtime answers 403, 404, or 405, calls /classify
+// and adapts that response; a successful fallback is remembered for the life
+// of the client.
 //
 // One Firewall may be shared by many goroutines. Classify and ClassifyBatch
 // keep request payloads, retries, and response decoding on the call stack, so
@@ -27,7 +31,9 @@ const (
 // metadata maps, and any custom HTTP transport safe for concurrent use.
 type Firewall struct {
 	apiKey           string
-	apiURL           string
+	classifyURL      string
+	legacyURL        string
+	legacyOnly       atomic.Bool
 	httpClient       *http.Client
 	mode             FirewallMode
 	shadowMode       bool
@@ -48,6 +54,10 @@ func New(opts Options) (*Firewall, error) {
 	}
 	if opts.APIURL == "" {
 		return nil, errors.New("firewall: APIURL is required")
+	}
+	classifyURL, legacyURL, err := classifyEndpoints(opts.APIURL)
+	if err != nil {
+		return nil, err
 	}
 	mode := opts.Mode
 	if mode == "" && opts.ShadowMode {
@@ -91,7 +101,8 @@ func New(opts Options) (*Firewall, error) {
 	}
 	return &Firewall{
 		apiKey:           opts.APIKey,
-		apiURL:           opts.APIURL,
+		classifyURL:      classifyURL,
+		legacyURL:        legacyURL,
 		httpClient:       httpClient,
 		mode:             mode,
 		shadowMode:       mode == ModeShadow,

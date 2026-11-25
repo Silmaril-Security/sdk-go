@@ -34,11 +34,11 @@ func ExampleFirewall_Classify() {
 	if err != nil {
 		var blocked *firewall.FirewallBlockedError
 		if errors.As(err, &blocked) {
-			fmt.Printf("blocked at %.4f\n", blocked.Score)
+			fmt.Printf("blocked by %s\n", blocked.Result.Source)
 			return
 		}
 		log.Fatal(err)
 	}
 
-	fmt.Printf("prediction: %s\n", result.Prediction)
+	fmt.Printf("action: %s\n", result.Action)
 }

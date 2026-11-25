@@ -6,25 +6,94 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 )
 
-const maxErrorBodyBytes = 1 << 16
+const (
+	maxErrorBodyBytes = 1 << 16
+	classifyPath      = "/v2/classify"
+	legacyPath        = "/classify"
+)
 
-func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
+func classifyEndpoints(apiURL string) (current string, legacy string, err error) {
+	parsed, err := url.Parse(apiURL)
+	if err != nil {
+		return "", "", fmt.Errorf("firewall: parse APIURL: %w", err)
+	}
+	escapedBase, versioned := strings.CutSuffix(strings.TrimSuffix(parsed.EscapedPath(), "/"), classifyPath)
+	if !versioned {
+		escapedBase = strings.TrimSuffix(escapedBase, legacyPath)
+	}
+	base, err := url.PathUnescape(escapedBase)
+	if err != nil {
+		return "", "", fmt.Errorf("firewall: parse APIURL: %w", err)
+	}
+	endpoint := func(path string) string {
+		target := *parsed
+		target.Path, target.RawPath = base+path, escapedBase+path
+		return target.String()
+	}
+	return endpoint(classifyPath), endpoint(legacyPath), nil
+}
+
+func predatesClassifyV2(status int) bool {
+	return status == http.StatusForbidden || status == http.StatusNotFound || status == http.StatusMethodNotAllowed
+}
+
+func (f *Firewall) decide(
+	ctx context.Context,
+	payload any,
+	batch bool,
+	inputs int,
+	requestedMode FirewallMode,
+	review *ReviewLevel,
+) ([]BlockResult, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("firewall: marshal request: %w", err)
+		return nil, fmt.Errorf("firewall: marshal request: %w", err)
 	}
+	decideAt := func(endpoint string) ([]BlockResult, error) {
+		resp, err := f.postDecisions(ctx, endpoint, body, batch)
+		if err != nil {
+			return nil, err
+		}
+		return blockResults(resp, inputs, requestedMode, review)
+	}
+	if !f.legacyOnly.Load() {
+		results, err := decideAt(f.classifyURL)
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || !predatesClassifyV2(apiErr.Status) {
+			return results, err
+		}
+	}
+	results, err := decideAt(f.legacyURL)
+	if err != nil {
+		return nil, err
+	}
+	f.legacyOnly.Store(true)
+	return results, nil
+}
+
+func (f *Firewall) postDecisions(ctx context.Context, endpoint string, body []byte, batch bool) (decisionResponse, error) {
+	var resp classifyResponse
+	if err := f.postJSON(ctx, endpoint, body, &resp); err != nil {
+		return decisionResponse{}, err
+	}
+	return resp.decisions(batch)
+}
+
+func (f *Firewall) postJSON(ctx context.Context, endpoint string, body []byte, out any) error {
 	maxRetries := f.retryBudget(ctx)
 	for attempt := 0; ; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, f.apiURL, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			return fmt.Errorf("firewall: build request: %w", err)
 		}

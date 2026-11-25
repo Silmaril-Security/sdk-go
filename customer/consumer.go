@@ -43,7 +43,7 @@ func main() {
 			must(os.WriteFile(path, []byte("Search performance improved; settings fixed.\n"), 0600))
 		}
 		_, stat := os.Stat(path)
-		rows = append(rows, map[string]any{"id": item.ID, "request_id": id, "prediction": result.Prediction, "blocked": blocked, "wrote_summary": stat == nil})
+		rows = append(rows, map[string]any{"id": item.ID, "request_id": id, "action": result.Action, "blocked": blocked, "wrote_summary": stat == nil})
 	}
 	data, err = json.Marshal(map[string]any{"run_id": run, "cases": rows})
 	must(err)

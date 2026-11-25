@@ -7,15 +7,47 @@ import (
 	"time"
 )
 
-// Prediction is the classifier's verdict for a single text.
-type Prediction string
+// Action is the enforcement decision for a single text. It is binary: the SDK
+// reports every wire value other than "allow" as ActionBlock.
+type Action string
 
 const (
-	PredictionBenign    Prediction = "BENIGN"
-	PredictionMalicious Prediction = "MALICIOUS"
+	ActionAllow Action = "allow"
+	ActionBlock Action = "block"
 )
 
-// FirewallMode controls how a malicious decision affects the caller.
+// Confidence is how confident the Firewall's assessment of a blocked item is,
+// on a closed scale ordered from ConfidenceVeryLow to ConfidenceVeryHigh.
+type Confidence string
+
+const (
+	ConfidenceVeryLow  Confidence = "very_low"
+	ConfidenceLow      Confidence = "low"
+	ConfidenceMedium   Confidence = "medium"
+	ConfidenceHigh     Confidence = "high"
+	ConfidenceVeryHigh Confidence = "very_high"
+)
+
+// Severity is how severe the Firewall's assessment rates a blocked item, on a
+// closed scale ordered from SeverityMinimal to SeverityCritical.
+type Severity string
+
+const (
+	SeverityMinimal  Severity = "minimal"
+	SeverityLow      Severity = "low"
+	SeverityModerate Severity = "moderate"
+	SeverityHigh     Severity = "high"
+	SeverityCritical Severity = "critical"
+)
+
+// Sources the Firewall reports for a block. BlockResult.Source is an open
+// string, so later runtimes may report others.
+const (
+	SourceModel      = "model"
+	SourceGovernance = "governance"
+)
+
+// FirewallMode controls how a blocking decision affects the caller.
 type FirewallMode string
 
 const (
@@ -74,29 +106,40 @@ type GovernanceDecision struct {
 	Reason           string              `json:"reason,omitempty"`
 }
 
-// BlockResult is the output of a single classification call.
+// BlockResult is the decision for a single classified text. Action is the only
+// field the SDK enforces on; the others are evidence.
 type BlockResult struct {
-	Prediction Prediction `json:"prediction"`
-	Score      float64    `json:"score"`
-	Threshold  float64    `json:"threshold"`
-	// Mode is empty when the response omits mode and no client or per-call mode was set.
-	Mode           FirewallMode               `json:"mode,omitempty"`
-	PrimaryOutcome PrimaryOutcome             `json:"primary_outcome,omitempty"`
-	OutcomeScores  map[HarmfulOutcome]float64 `json:"outcome_scores,omitempty"`
-	DetectorScores map[HarmfulOutcome]float64 `json:"detector_scores,omitempty"`
-	DetectorCounts map[HarmfulOutcome]int     `json:"detector_counts,omitempty"`
-	Governance     *GovernanceDecision        `json:"governance,omitempty"`
+	Action Action `json:"action"`
+	// Source names what decided a block. Empty on an allow.
+	Source string `json:"source,omitempty"`
+	// Confidence and Severity describe the Firewall's assessment of the item
+	// and are set only when that assessment is the reason for the block. They
+	// are empty on an allow, on a block that came from a governance policy, on
+	// a block the Firewall reached without that assessment, and against a
+	// runtime without /v2/classify.
+	Confidence Confidence `json:"confidence,omitempty"`
+	Severity   Severity   `json:"severity,omitempty"`
+	// Outcome is the predicted harm on a model block that has one.
+	Outcome    HarmfulOutcome      `json:"outcome,omitempty"`
+	Governance *GovernanceDecision `json:"governance,omitempty"`
+	// ModelID identifies the model release that classified the item, for
+	// provenance. Empty when the runtime reports none.
+	ModelID string `json:"model_id,omitempty"`
 	// Review is the acknowledged explicit request setting after a successful
 	// call, not evidence that the large-judge stage ran. Empty when review was
 	// omitted on the request.
 	Review ReviewLevel `json:"review,omitempty"`
+	// Mode is empty when no client or per-call mode was set and the response
+	// carries none.
+	Mode FirewallMode `json:"mode,omitempty"`
 }
 
 // ClassificationMetadata carries caller-provided request metadata alongside
 // the classified text without embedding it in the text itself.
 type ClassificationMetadata map[string]any
 
-// Options configures a Firewall client. APIKey and APIURL are required.
+// Options configures a Firewall client. APIKey and APIURL are required. APIURL
+// may be the deployment base or its /classify or /v2/classify endpoint.
 // Timeout defaults to 10 seconds for the default HTTP client. When HTTPClient
 // is set, Timeout is applied only when explicitly non-zero, by cloning the
 // provided client. The SDK also installs a no-redirect policy on cloned clients
