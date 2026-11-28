@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -60,8 +61,9 @@ func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
 		if decodeErr == nil {
 			return nil
 		}
-		if observed.err == nil {
-			// The body ended cleanly, so the JSON itself is malformed.
+		if observed.err == nil || !errors.Is(decodeErr, observed.err) {
+			// The decoder failed on the bytes themselves, not on an
+			// interrupted read, so the JSON or its types are wrong.
 			return fmt.Errorf("firewall: decode response: %w", decodeErr)
 		}
 		// The body was interrupted before a complete verdict arrived.

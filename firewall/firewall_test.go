@@ -1237,3 +1237,41 @@ func TestClassifyCompleteVerdictDoesNotRequireExtraRead(t *testing.T) {
 		t.Errorf("calls = %d, want 1", got)
 	}
 }
+
+// bytesWithErrorBody returns data together with a read error in one Read.
+type bytesWithErrorBody struct {
+	data string
+	err  error
+	done bool
+}
+
+func (b *bytesWithErrorBody) Read(p []byte) (int, error) {
+	if b.done {
+		return 0, b.err
+	}
+	b.done = true
+	return copy(p, b.data), b.err
+}
+
+func (b *bytesWithErrorBody) Close() error { return nil }
+
+func TestClassifyDecodeErrorWinsOverConcurrentReadError(t *testing.T) {
+	for name, data := range map[string]string{
+		"malformed":   `{"prediction":}`,
+		"wrong typed": `{"prediction":"BENIGN","score":"high","threshold":0.5,"mode":"block"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int32
+			fw := bodyFirewall(t, &calls, func(int32) io.ReadCloser {
+				return &bytesWithErrorBody{data: data, err: io.ErrUnexpectedEOF}
+			})
+			_, err := fw.Classify(context.Background(), "hi")
+			if err == nil || !strings.Contains(err.Error(), "decode response") {
+				t.Fatalf("err = %v, want decode response failure", err)
+			}
+			if got := calls.Load(); got != 1 {
+				t.Errorf("calls = %d, want 1 (decode errors are terminal)", got)
+			}
+		})
+	}
+}
