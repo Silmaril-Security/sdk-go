@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.9.1
+
+- Retry when a successful classification response is interrupted before the verdict arrives.
+- Remove canceled Flush calls from the pending waiter list.
+
 ## v0.9.0
 
 - Breaking: rename the tenant acceptable-use policy outcome to `abuse`.
