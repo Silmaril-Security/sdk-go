@@ -4,6 +4,7 @@ package firewall
 
 import (
 	"context"
+	"slices"
 	"sync"
 )
 
@@ -166,6 +167,21 @@ func (p *pendingVerdicts) drain(ctx context.Context) error {
 	case <-waiter:
 		return nil
 	case <-ctx.Done():
+		p.forget(waiter)
 		return ctx.Err()
+	}
+}
+
+// forget removes a canceled drain registration. When the last classification
+// finished first, finish already closed and cleared it, so nothing is left to
+// remove.
+func (p *pendingVerdicts) forget(waiter chan struct{}) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if i := slices.Index(p.idle, waiter); i >= 0 {
+		p.idle = slices.Delete(p.idle, i, i+1)
+	}
+	if len(p.idle) == 0 {
+		p.idle = nil
 	}
 }

@@ -566,3 +566,44 @@ func TestProtectLeavesNoGoroutines(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+func TestFlushReleasesCanceledWaiters(t *testing.T) {
+	held := newHeldServer(t)
+	fw := newProtectFirewall(t, held, Options{Mode: ModeShadow})
+	if _, err := Protect(context.Background(), fw, "hello", answer); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 5; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := fw.Flush(ctx); !errors.Is(err, context.Canceled) {
+			t.Fatalf("Flush with a canceled context = %v", err)
+		}
+	}
+	fw.pending.mu.Lock()
+	waiting := len(fw.pending.idle)
+	fw.pending.mu.Unlock()
+	if waiting != 0 {
+		t.Errorf("canceled Flush calls left %d waiters registered", waiting)
+	}
+
+	// An active Flush still wakes once the client goes idle.
+	held.releaseAll()
+	flush(t, fw)
+}
+
+func TestPendingForgetIgnoresWaiterClearedByIdle(t *testing.T) {
+	p := newPendingVerdicts(1, 1)
+	other := make(chan struct{})
+	gone := make(chan struct{})
+	p.idle = []chan struct{}{other}
+	p.forget(gone)
+	if len(p.idle) != 1 || p.idle[0] != other {
+		t.Fatalf("forget removed an unrelated waiter: %v", p.idle)
+	}
+	p.forget(other)
+	if p.idle != nil {
+		t.Fatalf("idle = %v, want nil", p.idle)
+	}
+}

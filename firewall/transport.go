@@ -54,13 +54,44 @@ func (f *Firewall) postJSON(ctx context.Context, payload any, out any) error {
 		if resp.StatusCode >= 300 {
 			return apiErrorFromResponse(resp)
 		}
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			_ = resp.Body.Close()
-			return fmt.Errorf("firewall: decode response: %w", err)
-		}
+		observed := &observedBody{body: resp.Body}
+		decodeErr := json.NewDecoder(observed).Decode(out)
 		_ = resp.Body.Close()
-		return nil
+		if decodeErr == nil {
+			return nil
+		}
+		if observed.err == nil {
+			// The body ended cleanly, so the JSON itself is malformed.
+			return fmt.Errorf("firewall: decode response: %w", decodeErr)
+		}
+		// The body was interrupted before a complete verdict arrived.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if attempt < maxRetries {
+			if err := waitBeforeRetry(ctx, f.retryDelay(attempt, nil)); err != nil {
+				return err
+			}
+			continue
+		}
+		return fmt.Errorf("firewall: read response: %w", observed.err)
 	}
+}
+
+// observedBody records the first real error its body returns from Read, so a
+// failed decode can be told apart from a transport interruption. io.EOF is a
+// clean end of body and is not recorded.
+type observedBody struct {
+	body io.Reader
+	err  error
+}
+
+func (o *observedBody) Read(p []byte) (int, error) {
+	n, err := o.body.Read(p)
+	if err != nil && err != io.EOF && o.err == nil {
+		o.err = err
+	}
+	return n, err
 }
 
 func apiErrorFromResponse(resp *http.Response) error {
