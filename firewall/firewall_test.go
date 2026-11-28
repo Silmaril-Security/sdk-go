@@ -1093,3 +1093,192 @@ func TestClassifyLongInputUsesOneHTTPCall(t *testing.T) {
 		t.Fatalf("max active requests = %d, want 1", maxActive.Load())
 	}
 }
+
+// failingBody yields data and then fails with err, like a connection that
+// drops while a success response is still arriving.
+type failingBody struct {
+	data   string
+	err    error
+	onFail func()
+	read   bool
+}
+
+func (b *failingBody) Read(p []byte) (int, error) {
+	if !b.read {
+		b.read = true
+		return copy(p, b.data), nil
+	}
+	if b.onFail != nil {
+		b.onFail()
+	}
+	return 0, b.err
+}
+
+func (b *failingBody) Close() error { return nil }
+
+const benignResponseJSON = `{"prediction":"BENIGN","score":0.1,"threshold":0.5,"mode":"block"}`
+
+func bodyFirewall(t *testing.T, calls *atomic.Int32, body func(call int32) io.ReadCloser) *Firewall {
+	t.Helper()
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     make(http.Header),
+				Body:       body(calls.Add(1)),
+				Request:    req,
+			}, nil
+		}),
+	}
+	fw, err := New(Options{APIKey: "sk", APIURL: "https://example.com", HTTPClient: client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fw.retryBaseBackoff = time.Millisecond
+	fw.retryJitter = noJitter
+	return fw
+}
+
+func TestClassifyRetriesInterruptedSuccessBody(t *testing.T) {
+	var calls atomic.Int32
+	fw := bodyFirewall(t, &calls, func(call int32) io.ReadCloser {
+		if call < 3 {
+			return &failingBody{data: benignResponseJSON[:20], err: io.ErrUnexpectedEOF}
+		}
+		return io.NopCloser(strings.NewReader(benignResponseJSON))
+	})
+	res, err := fw.Classify(context.Background(), "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Score != 0.1 {
+		t.Errorf("result = %+v", res)
+	}
+	if got := calls.Load(); got != 3 {
+		t.Errorf("calls = %d, want 3", got)
+	}
+}
+
+func TestClassifyInterruptedSuccessBodyStopsAtRetryBudget(t *testing.T) {
+	var calls atomic.Int32
+	fw := bodyFirewall(t, &calls, func(int32) io.ReadCloser {
+		return &failingBody{data: benignResponseJSON[:20], err: io.ErrUnexpectedEOF}
+	})
+	_, err := fw.Classify(context.Background(), "hi")
+	if !errors.Is(err, io.ErrUnexpectedEOF) || !strings.Contains(err.Error(), "read response") {
+		t.Fatalf("err = %v, want read response failure", err)
+	}
+	if got, want := calls.Load(), int32(fw.maxRetries+1); got != want {
+		t.Errorf("calls = %d, want %d", got, want)
+	}
+}
+
+func TestClassifyMalformedSuccessBodyIsNotRetried(t *testing.T) {
+	var calls atomic.Int32
+	fw := bodyFirewall(t, &calls, func(int32) io.ReadCloser {
+		return io.NopCloser(strings.NewReader(`{"prediction":`))
+	})
+	_, err := fw.Classify(context.Background(), "hi")
+	if err == nil || !strings.Contains(err.Error(), "decode response") {
+		t.Fatalf("err = %v, want decode failure", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("calls = %d, want 1", got)
+	}
+}
+
+func TestClassifyCancelDuringSuccessBodyIsNotRetried(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var calls atomic.Int32
+	fw := bodyFirewall(t, &calls, func(int32) io.ReadCloser {
+		return &failingBody{data: benignResponseJSON[:20], err: io.ErrUnexpectedEOF, onFail: cancel}
+	})
+	_, err := fw.Classify(ctx, "hi")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("calls = %d, want 1", got)
+	}
+}
+
+// verdictThenFailBody serves a complete newline-framed verdict, however many
+// reads the decoder needs to take it, and fails the test if the client reads
+// again once every byte has been delivered, since a complete verdict must not
+// wait for EOF.
+type verdictThenFailBody struct {
+	t    *testing.T
+	data string
+}
+
+func (b *verdictThenFailBody) Read(p []byte) (int, error) {
+	if b.data == "" {
+		b.t.Error("client read past a complete verdict")
+		return 0, io.ErrUnexpectedEOF
+	}
+	n := copy(p, b.data)
+	b.data = b.data[n:]
+	return n, nil
+}
+
+func (b *verdictThenFailBody) Close() error { return nil }
+
+func TestClassifyCompleteVerdictDoesNotRequireExtraRead(t *testing.T) {
+	var calls atomic.Int32
+	fw := bodyFirewall(t, &calls, func(int32) io.ReadCloser {
+		return &verdictThenFailBody{t: t, data: benignResponseJSON + "\n"}
+	})
+	res, err := fw.Classify(context.Background(), "hi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Score != 0.1 {
+		t.Errorf("result = %+v", res)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("calls = %d, want 1", got)
+	}
+}
+
+// bytesWithErrorBody delivers data and then fails. The failure rides on the
+// Read that returns the final bytes, however many reads the decoder needs.
+type bytesWithErrorBody struct {
+	data string
+	err  error
+}
+
+func (b *bytesWithErrorBody) Read(p []byte) (int, error) {
+	if b.data == "" {
+		return 0, b.err
+	}
+	n := copy(p, b.data)
+	b.data = b.data[n:]
+	if b.data == "" {
+		return n, b.err
+	}
+	return n, nil
+}
+
+func (b *bytesWithErrorBody) Close() error { return nil }
+
+func TestClassifyDecodeErrorWinsOverConcurrentReadError(t *testing.T) {
+	for name, data := range map[string]string{
+		"malformed":   `{"prediction":}` + "\n",
+		"wrong typed": `{"prediction":"BENIGN","score":"high","threshold":0.5,"mode":"block"}` + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int32
+			fw := bodyFirewall(t, &calls, func(int32) io.ReadCloser {
+				return &bytesWithErrorBody{data: data, err: io.ErrUnexpectedEOF}
+			})
+			_, err := fw.Classify(context.Background(), "hi")
+			if err == nil || !strings.Contains(err.Error(), "decode response") {
+				t.Fatalf("err = %v, want decode response failure", err)
+			}
+			if got := calls.Load(); got != 1 {
+				t.Errorf("calls = %d, want 1 (decode errors are terminal)", got)
+			}
+		})
+	}
+}
