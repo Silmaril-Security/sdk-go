@@ -1203,20 +1203,23 @@ func TestClassifyCancelDuringSuccessBodyIsNotRetried(t *testing.T) {
 	}
 }
 
-// verdictThenFailBody serves a complete verdict and fails the test if the
-// client reads again, since a complete verdict must not wait for EOF.
+// verdictThenFailBody serves a complete newline-framed verdict, however many
+// reads the decoder needs to take it, and fails the test if the client reads
+// again once every byte has been delivered, since a complete verdict must not
+// wait for EOF.
 type verdictThenFailBody struct {
-	t     *testing.T
-	reads int
+	t    *testing.T
+	data string
 }
 
 func (b *verdictThenFailBody) Read(p []byte) (int, error) {
-	b.reads++
-	if b.reads > 1 {
+	if b.data == "" {
 		b.t.Error("client read past a complete verdict")
 		return 0, io.ErrUnexpectedEOF
 	}
-	return copy(p, benignResponseJSON), nil
+	n := copy(p, b.data)
+	b.data = b.data[n:]
+	return n, nil
 }
 
 func (b *verdictThenFailBody) Close() error { return nil }
@@ -1224,7 +1227,7 @@ func (b *verdictThenFailBody) Close() error { return nil }
 func TestClassifyCompleteVerdictDoesNotRequireExtraRead(t *testing.T) {
 	var calls atomic.Int32
 	fw := bodyFirewall(t, &calls, func(int32) io.ReadCloser {
-		return &verdictThenFailBody{t: t}
+		return &verdictThenFailBody{t: t, data: benignResponseJSON + "\n"}
 	})
 	res, err := fw.Classify(context.Background(), "hi")
 	if err != nil {
@@ -1238,27 +1241,31 @@ func TestClassifyCompleteVerdictDoesNotRequireExtraRead(t *testing.T) {
 	}
 }
 
-// bytesWithErrorBody returns data together with a read error in one Read.
+// bytesWithErrorBody delivers data and then fails. The failure rides on the
+// Read that returns the final bytes, however many reads the decoder needs.
 type bytesWithErrorBody struct {
 	data string
 	err  error
-	done bool
 }
 
 func (b *bytesWithErrorBody) Read(p []byte) (int, error) {
-	if b.done {
+	if b.data == "" {
 		return 0, b.err
 	}
-	b.done = true
-	return copy(p, b.data), b.err
+	n := copy(p, b.data)
+	b.data = b.data[n:]
+	if b.data == "" {
+		return n, b.err
+	}
+	return n, nil
 }
 
 func (b *bytesWithErrorBody) Close() error { return nil }
 
 func TestClassifyDecodeErrorWinsOverConcurrentReadError(t *testing.T) {
 	for name, data := range map[string]string{
-		"malformed":   `{"prediction":}`,
-		"wrong typed": `{"prediction":"BENIGN","score":"high","threshold":0.5,"mode":"block"}`,
+		"malformed":   `{"prediction":}` + "\n",
+		"wrong typed": `{"prediction":"BENIGN","score":"high","threshold":0.5,"mode":"block"}` + "\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			var calls atomic.Int32
